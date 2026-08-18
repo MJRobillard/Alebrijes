@@ -185,3 +185,23 @@ def test_synthesize_chapter_raises_when_nothing_rendered() -> None:
 
     with pytest.raises(RuntimeError, match="No audio rendered"):
         synthesize_chapter([], {}, agent)
+
+
+def test_render_book_fails_fast_when_ffmpeg_missing_before_any_synthesis(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from alebrijes.ingest import Book
+    from alebrijes.render import render_book
+
+    monkeypatch.setattr("alebrijes.render.shutil.which", lambda name: None)
+
+    # No model= passed on purpose: if the ffmpeg check didn't run first,
+    # this would go on to actually load the real pocket-tts model (slow,
+    # network-dependent) instead of failing immediately with the clear
+    # ffmpeg error -- so a fast, clean failure here proves the check runs
+    # before any of that, not just that it exists somewhere in the function.
+    book = Book(title="Fixture", chapters=[])
+    cast_file = CastFile(book_title="Fixture", entries=[CastEntry(character=NARRATOR, voice_state_path="alba")])
+
+    with pytest.raises(RuntimeError, match="ffmpeg is required"):
+        render_book(book, cast_file, tmp_path / "out.m4b")

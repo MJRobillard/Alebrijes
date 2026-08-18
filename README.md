@@ -28,6 +28,16 @@ done, and what's next.
 
 ## Install
 
+**`ffmpeg` must be on PATH** — not pip-installable, not bundled yet (that's
+a Phase 4 packaging concern), and needed for the final `.m4b` build step.
+`alebrijes render` checks for it up front and fails fast with a clear error
+if it's missing, rather than after synthesizing every chapter first.
+
+```bash
+winget install ffmpeg     # Windows
+brew install ffmpeg       # macOS
+```
+
 **Use a dedicated virtual environment** — not your global/system Python.
 Confirmed on a real test machine that already had other CUDA-pinned ML
 tooling installed (`unsloth-zoo`, `xformers`, `torchaudio`, `torchvision`):

@@ -153,6 +153,19 @@ def render_book(
     what's available without restructuring `synthesize_chapter`'s sequential
     loop. Good enough for a progress bar; not real-time per-line progress.
     """
+    # build_m4b (the very last step) already raises a clear RuntimeError if
+    # ffmpeg is missing, but by then every chapter has already been
+    # synthesized — the slow part — and the staging dir holding that work
+    # gets deleted by the `finally` below regardless. Check up front instead
+    # so a missing ffmpeg fails in milliseconds, not after however long a
+    # full multi-chapter render takes.
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError(
+            "ffmpeg is required to build the final .m4b but was not found on PATH. "
+            "Install it first: `winget install ffmpeg` (Windows), `brew install ffmpeg` (macOS), "
+            "or your distro's package manager (Linux)."
+        )
+
     if model is None:
         from pocket_tts import TTSModel
 
