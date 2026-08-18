@@ -137,14 +137,27 @@ API, which only calls the Phase 1 library — no pipeline logic in
 frontend/route-handler code. The one new screen that matters: cast review —
 character list, voice picker, inline playback of low-confidence attributions.
 
+**Backend done** (`alebrijes/server.py`): all four hardening points
+implemented and verified against a real socket, not just `TestClient` —
+confirmed unreachable from the LAN interface, all four behaviors (missing
+token, wrong token, wrong `Origin`, missing `Origin`) checked over real HTTP.
+Routes: `/api/health`, `/api/cast` (synchronous), `/api/render` (starts a
+background thread, returns a `job_id` immediately) + `/api/render/{job_id}`
+(polls status; chapter-level progress via `render_book`'s new
+`on_chapter_done` callback — not per-line; real SSE/WebSocket streaming is a
+documented future refinement, not built yet). `create_app()` takes
+injectable `ingest_book`/`render_fn` so tests don't need the real pocket-tts
+model loaded.
+
+Remaining work: the pywebview shell itself (the frontend HTML/JS + the
+window that embeds the token/port and loads it) — nothing built yet.
+
 **Verification:** manual walkthrough — open a book, review/adjust cast,
 render (watching live progress over the local API) — with no script editing
-or filesystem knowledge required. Checked off by hand; UI correctness isn't
-unit-testable. The FastAPI routes themselves are testable with `TestClient`,
-no GUI involved, same as the rest of this codebase's pure-logic-first pattern.
-The four hardening points above get their own tests: rejects a request with
-no/wrong token, rejects a request with the wrong `Origin`, and confirms the
-server is not reachable on any non-loopback interface.
+or filesystem knowledge required. Checked off by hand once the shell exists;
+UI correctness isn't unit-testable. The FastAPI routes themselves are tested
+with `TestClient`, no GUI involved, same as the rest of this codebase's
+pure-logic-first pattern.
 
 ## Phase 4 — Packaging & distribution
 
