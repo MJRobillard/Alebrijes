@@ -101,22 +101,85 @@ checkout beyond the installed package.
 
 ## Phase 3 — Desktop GUI rewrite
 
-Replace pocket-tts-agent's 1,800-line Tkinter monolith with PySide6 (Qt): an
-MVVM split where the view talks only to a thin app-state class, which talks
-only to the Phase 1 library. The one new screen that matters: cast review —
+Replace pocket-tts-agent's 1,800-line Tkinter monolith with **pywebview +
+a local FastAPI backend**, not PySide6/Qt as originally sketched — revisited
+once "easy to set up and download on both Mac and Windows" became the
+explicit priority. Decision record:
+
+- **UI shell: pywebview.** A native OS window (WKWebView on macOS,
+  WebView2/Edge engine on Windows) hosting an HTML/CSS/JS frontend — not the
+  user's actual browser, no URL bar/tabs, indistinguishable from a normal
+  desktop app. Chosen over Electron (its bundled Chromium adds ~150MB on top
+  of an already-nontrivial ML payload) and over PySide6 (same PyInstaller
+  packaging story, but Qt widget styling is more work to make look good than
+  HTML/CSS, and an HTML frontend is directly reusable for the Phase 5
+  thin-client idea).
+- **Backend: local FastAPI**, not pywebview's built-in JS↔Python bridge —
+  chosen specifically for real render-progress streaming (a render takes
+  minutes; SSE/WebSockets map naturally onto that, matching the progress
+  dashboard already in `synth/parallel.py`) and because the same frontend
+  can talk to `localhost` today and a remote render server later
+  (Phase 5) with zero rewrite. The bridge option was the safer default (no
+  listening socket at all — see below) and remains the fallback if the
+  hardening below turns out to be more than this needs.
+- **Required hardening** (a local HTTP server is a real, well-documented
+  attack surface — DNS rebinding lets a malicious webpage in the user's
+  actual browser drive an unauthenticated localhost API; this bitten real
+  apps, e.g. early Jupyter): bind strictly to `127.0.0.1`, never `0.0.0.0`;
+  bind to an OS-assigned ephemeral port (`port=0`), not a fixed one, to avoid
+  collisions; require a random per-launch secret token embedded in the page
+  pywebview loads and sent on every request (the Jupyter pattern); validate
+  the `Origin` header on every request. All four are required together, not
+  optional extras — this is what closes the gap with the no-server option.
+
+Architecture: MVVM-equivalent split where the frontend only calls the local
+API, which only calls the Phase 1 library — no pipeline logic in
+frontend/route-handler code. The one new screen that matters: cast review —
 character list, voice picker, inline playback of low-confidence attributions.
 
 **Verification:** manual walkthrough — open a book, review/adjust cast,
-render — with no script editing or filesystem knowledge required. Checked off
-by hand; UI correctness isn't unit-testable.
+render (watching live progress over the local API) — with no script editing
+or filesystem knowledge required. Checked off by hand; UI correctness isn't
+unit-testable. The FastAPI routes themselves are testable with `TestClient`,
+no GUI involved, same as the rest of this codebase's pure-logic-first pattern.
+The four hardening points above get their own tests: rejects a request with
+no/wrong token, rejects a request with the wrong `Origin`, and confirms the
+server is not reachable on any non-loopback interface.
 
 ## Phase 4 — Packaging & distribution
 
-PyInstaller or briefcase build into a signed installer, bundling or
-first-run-fetching model weights with a visible progress step.
+PyInstaller into a signed installer (`.dmg`/`.pkg` on macOS, `.exe`/`.msi` on
+Windows), one per OS built on that OS's own CI runner. Decision record from
+sizing this out concretely:
+
+- **Bundle the full offline stack, don't first-run-download it.** CPU-only
+  torch (~190MB — the CUDA build this dev machine happened to have installed
+  is 1.8GB and irrelevant; no consumer Mac has an NVIDIA GPU and Apple
+  Silicon uses MPS, not CUDA) + the pocket-tts model weights (~225MB,
+  measured) + spacy/ffmpeg/numpy/scipy/etc. comes to roughly **550–700MB**
+  total — a real but ordinary download. Given this project's whole
+  differentiator is "local and private," a single "it just works, no
+  internet needed after install" download beats a smaller installer that
+  needs a progress bar and network access before first use.
+- **macOS: notarization is mandatory**, not optional — Gatekeeper blocks or
+  scares off unsigned apps on current macOS. Needs an Apple Developer ID
+  ($99/year) and, specific to PyInstaller, one extra entitlement
+  (`com.apple.security.cs.allow-unsigned-executable-memory`) for its
+  unsigned-memory-mapping trick.
+- **Windows: a standard OV code-signing cert (~$150–250/year) is enough** —
+  EV certificates stopped bypassing SmartScreen in 2024, so paying the EV
+  premium purely to dodge SmartScreen warnings isn't justified anymore.
+  SmartScreen reputation still builds gradually with download counts either
+  way. Certs are now capped at 1-year validity (a Feb 2026 rule change), so
+  annual renewal is unavoidable regardless of cert type.
+- **Budget ~$250–350/year ongoing** for both platforms' signing, plus CI time
+  for macOS notarization — this is a recurring cost, not a one-time setup
+  step.
 
 **Verification:** the built installer launches and renders a book on a
-machine with no Python/dev environment installed.
+machine with no Python/dev environment installed, with no Gatekeeper/
+SmartScreen block on a clean machine (tested via a VM with no prior trust of
+the signing identity, not just the developer's own already-trusted machine).
 
 ## Phase 5 — Mobile (gated)
 
