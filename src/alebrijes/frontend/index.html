@@ -102,6 +102,8 @@
   #chapter-progress-list li.done { color: var(--ink); }
   #chapter-progress-list li.current { color: var(--accent); font-weight: 600; }
   #chapter-progress-list .mark { width: 1.1rem; text-align: center; font-family: ui-monospace, monospace; }
+  footer { margin-top: 1.5rem; font-size: 0.78rem; color: var(--ink-soft); text-align: center; }
+  footer a { color: inherit; }
   #warning-banner {
     background: var(--amber-bg, #f3e3c9);
     border: 1px solid var(--danger);
@@ -176,6 +178,11 @@
     <div id="render-status" class="status"></div>
     <ol id="chapter-progress-list" hidden></ol>
   </section>
+
+  <footer>
+    Speech synthesis by <a href="https://huggingface.co/kyutai/pocket-tts" target="_blank" rel="noopener">Pocket-TTS</a>,
+    © Kyutai, licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>.
+  </footer>
 </main>
 
 <script>
