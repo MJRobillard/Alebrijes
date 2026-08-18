@@ -12,20 +12,24 @@ assemble**. See `PHASES.md` for the rollout plan and verification checklist.
 
 ## Status
 
-Early scaffold. `synth` and `assemble` are ported from pocket-tts-agent and
-working. `ingest`, `segment`, `attribute`, and `cast` are stubbed interfaces —
-see `PHASES.md` for what's next.
+`synth` and `assemble` are ported from pocket-tts-agent and working. `segment`
+(dialogue/narration splitting) and `attribute` (`RuleBasedAttributor` — spaCy
+dependency parse + fiction-specific fallback heuristics, no cloud calls) are
+implemented and tested. `ingest` and `cast` are still stubbed interfaces — see
+`PHASES.md` for what's next.
 
 ## Project layout
 
 - `src/alebrijes/` — the pipeline, one module per stage
-- `tests/` — unit tests, no model downloads required
+- `tests/` — unit tests, no model downloads required except spaCy's English
+  model for `attribute` (see below)
 - `PHASES.md` — the rebuild roadmap and per-phase verification
 
 ## Install
 
 ```bash
 pip install -e ".[dev]"
+python -m spacy download en_core_web_sm  # required for alebrijes.attribute
 ```
 
 ## Testing
