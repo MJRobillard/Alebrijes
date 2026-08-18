@@ -180,10 +180,24 @@ silently eating the extra size/load time. The Phase 4 CI build pipeline
 below must enforce the CPU wheel too, not just document it — a signed
 installer built without that step ships the same oversized/slower artifact.
 
-Remaining work: the render-progress bar is chapter-granularity only
-(matches the backend's current resolution); no inline playback of
-low-confidence lines yet (the review list shows text + confidence, not audio
-preview) — both documented as known v1 gaps, not oversights.
+**Inline preview done** (`POST /api/preview`, `alebrijes/preview.py`): a
+"Preview" button per low-confidence review line, resolved to that
+character's currently-selected voice (falling back to Narrator's for
+"Unknown"-attributed lines). Closes the last named-but-unbuilt piece of this
+phase's stated goal. Verified with a real live pocket-tts synthesis call
+through a running server, not just shaped test bytes. Found and fixed a real
+bug along the way: `write_wav_array` unconditionally `str()`'d its
+destination, so a `BytesIO` (needed here for in-memory audio, no disk
+round-trip) silently wrote to a garbage on-disk filename derived from the
+object's repr instead of into the buffer — now fixed with a regression test.
+
+Remaining work: the render-progress bar is chapter-granularity only (matches
+the backend's current resolution) — a documented v1 gap, not an oversight;
+and full end-to-end verification is still pending your confirmation that a
+real render actually completes with a playable `.m4b` on the Windows machine
+(the CUDA/venv issues were fixed but that final check hasn't come back yet),
+plus the equivalent real-hardware check on macOS, which hasn't happened at
+all yet.
 
 **Verification:** manual walkthrough — open a book, review/adjust cast,
 render (watching live progress over the local API) — with no script editing
