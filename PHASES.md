@@ -181,6 +181,36 @@ machine with no Python/dev environment installed, with no Gatekeeper/
 SmartScreen block on a clean machine (tested via a VM with no prior trust of
 the signing identity, not just the developer's own already-trusted machine).
 
+### Build pipeline
+
+`pyinstaller` runs in `--onedir` mode, not `--onefile` — at ~550–700MB,
+`--onefile` would re-extract the whole payload into a temp dir on *every*
+launch (a multi-second delay each time), where `--onedir` unpacks once at
+install time. Built separately on `macos-latest` and `windows-latest` GitHub
+Actions runners — a Mac app can't be cross-built from Windows or vice versa.
+
+1. `pyinstaller` (onedir) bundles the FastAPI backend + pywebview shell +
+   torch/spacy/pocket-tts weights/ffmpeg into a platform-specific app folder.
+2. **macOS**: `codesign` the `.app` with the Developer ID cert → `xcrun
+   notarytool submit` → `xcrun stapler staple` (ticket must be stapled, not
+   just submitted, so the app still passes Gatekeeper offline) → wrap in a
+   `.dmg` via `create-dmg` for the drag-to-Applications experience.
+3. **Windows**: `signtool sign` the `.exe` → build the installer with Inno
+   Setup (a single `.iss` script) — produces the Start Menu shortcut and the
+   "Add or Remove Programs" uninstaller entry, which a bare exe/zip doesn't
+   give you.
+4. A signed-but-unwrapped zip of the same `.app`/`.exe` folder is also worth
+   publishing as a secondary "portable" download (no install footprint, no
+   admin rights needed, e.g. for running off a USB drive) — it costs nothing
+   extra since it's the same signed artifact, just zipped instead of
+   installer-wrapped. Not the primary/recommended download: no Gatekeeper
+   drag-in experience, no Start Menu entry, no uninstaller. Zipping never
+   substitutes for signing — Gatekeeper and SmartScreen both check the
+   binary's signature at launch regardless of how it was delivered.
+5. Both installers (plus the optional portable zips) attached to a GitHub
+   Release; the README/landing page links directly to "Download for Mac" /
+   "Download for Windows" pointing at those release assets.
+
 ## Phase 5 — Mobile (gated)
 
 Not started until Phase 3 has real usage showing people want this away from
