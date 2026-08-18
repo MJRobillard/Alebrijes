@@ -10,9 +10,10 @@ directly, never disclosed anywhere else, so a page an attacker controls has
 no way to learn it.
 
 The one thing routed outside the HTTP API entirely: the native file-open
-dialog (`FileApi.pick_file`), exposed via pywebview's own JS bridge instead
-of an HTTP endpoint — it's an OS-shell capability with no network path, not
-application logic, so it doesn't belong behind the token/Origin layer.
+dialogs (`FileApi.pick_file` / `FileApi.pick_audio_file`), exposed via
+pywebview's own JS bridge instead of an HTTP endpoint — they're an OS-shell
+capability with no network path, not application logic, so they don't
+belong behind the token/Origin layer.
 """
 
 from __future__ import annotations
@@ -20,19 +21,30 @@ from __future__ import annotations
 import threading
 from typing import Optional
 
+from alebrijes.config import AUDIO_EXTENSIONS
 from alebrijes.server import create_app, find_free_port, generate_token
 
 _BOOK_FILE_TYPES = ("Book files (*.epub;*.pdf;*.txt)", "All files (*.*)")
+_AUDIO_FILE_TYPES = (
+    "Audio files (" + ";".join(f"*{ext}" for ext in sorted(AUDIO_EXTENSIONS)) + ")",
+    "All files (*.*)",
+)
 
 
 class FileApi:
     """Exposed to the frontend as `window.pywebview.api`."""
 
     def pick_file(self) -> Optional[str]:
+        return self._pick(_BOOK_FILE_TYPES)
+
+    def pick_audio_file(self) -> Optional[str]:
+        return self._pick(_AUDIO_FILE_TYPES)
+
+    def _pick(self, file_types: tuple[str, ...]) -> Optional[str]:
         import webview
 
         window = webview.windows[0]
-        result = window.create_file_dialog(webview.FileDialog.OPEN, file_types=_BOOK_FILE_TYPES)
+        result = window.create_file_dialog(webview.FileDialog.OPEN, file_types=file_types)
         if not result:
             return None
         return result[0]

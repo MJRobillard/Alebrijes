@@ -50,6 +50,12 @@
   }
   section h2 { font-size: 1rem; margin: 0 0 0.9rem; }
   section[disabled] { opacity: 0.5; pointer-events: none; }
+  .badge {
+    display: inline-block; font-size: 0.68rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--ink-soft); border: 1px solid var(--line);
+    border-radius: 4px; padding: 0.05rem 0.4rem; margin-left: 0.4rem; vertical-align: middle;
+  }
+  .hint { font-size: 0.85rem; color: var(--ink-soft); margin: 0 0 0.9rem; line-height: 1.5; }
   button {
     font: inherit;
     background: var(--accent);
@@ -122,6 +128,28 @@
     </div>
   </section>
 
+  <section id="clone-voice-section">
+    <h2>Clone a voice <span class="badge">optional</span></h2>
+    <p class="hint">
+      A clean, single-speaker recording works best. pocket-tts's own guidance says even
+      ~5 seconds can work, but a longer sample — roughly 20–30 seconds, with some natural
+      variation in tone rather than one flat sentence — tends to produce a more expressive,
+      less monotone clone. Avoid background music/noise and overlapping speakers. Use
+      Start/End below to trim to just the clean part of a longer recording.
+    </p>
+    <div class="row">
+      <button id="choose-audio-btn">Choose Audio File…</button>
+      <span id="audio-path" class="path">No audio file selected.</span>
+    </div>
+    <div class="row" style="margin-top: 0.6rem;">
+      <input type="text" id="voice-name-input" placeholder="Voice name (e.g. narrator)" style="max-width: 220px;">
+      <input type="number" id="voice-start-input" placeholder="Start (s)" step="0.1" style="max-width: 110px;">
+      <input type="number" id="voice-end-input" placeholder="End (s)" step="0.1" style="max-width: 110px;">
+      <button id="clone-voice-btn">Clone Voice</button>
+    </div>
+    <div id="clone-voice-status" class="status" style="margin-top: 0.5rem;"></div>
+  </section>
+
   <section id="cast-section" disabled>
     <h2>2. Build &amp; review cast</h2>
     <div class="row">
@@ -191,6 +219,57 @@
         castSection.removeAttribute("disabled");
       });
     });
+  });
+
+  const audioPathEl = document.getElementById("audio-path");
+  const cloneVoiceStatusEl = document.getElementById("clone-voice-status");
+  state.audioPath = null;
+
+  document.getElementById("choose-audio-btn").addEventListener("click", function () {
+    withPywebviewApi(function () {
+      window.pywebview.api.pick_audio_file().then(function (path) {
+        if (!path) return;
+        state.audioPath = path;
+        audioPathEl.textContent = path;
+      });
+    });
+  });
+
+  document.getElementById("clone-voice-btn").addEventListener("click", function () {
+    const name = document.getElementById("voice-name-input").value.trim();
+    const startRaw = document.getElementById("voice-start-input").value;
+    const endRaw = document.getElementById("voice-end-input").value;
+
+    if (!state.audioPath) {
+      cloneVoiceStatusEl.className = "status error";
+      cloneVoiceStatusEl.textContent = "Choose an audio file first.";
+      return;
+    }
+    if (!name) {
+      cloneVoiceStatusEl.className = "status error";
+      cloneVoiceStatusEl.textContent = "Enter a voice name.";
+      return;
+    }
+
+    cloneVoiceStatusEl.className = "status";
+    cloneVoiceStatusEl.textContent = "Cloning voice…";
+    apiFetch("/api/voices", {
+      method: "POST",
+      body: JSON.stringify({
+        source: state.audioPath,
+        name: name,
+        start: startRaw === "" ? null : parseFloat(startRaw),
+        end: endRaw === "" ? null : parseFloat(endRaw),
+      }),
+    })
+      .then(function () {
+        cloneVoiceStatusEl.className = "status done";
+        cloneVoiceStatusEl.textContent = "Cloned \"" + name + "\" — available in the voice dropdowns below.";
+      })
+      .catch(function (err) {
+        cloneVoiceStatusEl.className = "status error";
+        cloneVoiceStatusEl.textContent = "Error: " + err.message;
+      });
   });
 
   const castStatusEl = document.getElementById("cast-status");

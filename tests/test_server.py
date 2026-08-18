@@ -128,6 +128,78 @@ def test_voices_endpoint_requires_token(tmp_path: Path) -> None:
     assert response.status_code == 403
 
 
+def test_add_voice_clones_and_returns_updated_voice_list(tmp_path: Path) -> None:
+    source = tmp_path / "clip.wav"
+    source.write_bytes(b"fake audio")
+    voices_dir = tmp_path / "voices"
+
+    calls = []
+
+    def fake_clone(source_path: Path, name: str, start, end, voices_dir_arg: Path) -> Path:
+        calls.append((source_path, name, start, end, voices_dir_arg))
+        voices_dir_arg.mkdir(parents=True, exist_ok=True)
+        out = voices_dir_arg / f"{name}.pt"
+        out.write_bytes(b"fake-state")
+        return out
+
+    client = _client(voices_dir=voices_dir, clone_voice_fn=fake_clone)
+    response = client.post(
+        "/api/voices",
+        headers=_headers(),
+        json={"source": str(source), "name": "narrator_clone", "start": 1.0, "end": 6.0},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    names = {c["name"] for c in body["cloned"]}
+    assert "narrator_clone" in names
+    assert calls == [(source, "narrator_clone", 1.0, 6.0, voices_dir)]
+
+
+def test_add_voice_rejects_missing_source_file(tmp_path: Path) -> None:
+    client = _client(voices_dir=tmp_path)
+    response = client.post(
+        "/api/voices", headers=_headers(), json={"source": str(tmp_path / "missing.wav"), "name": "test"}
+    )
+    assert response.status_code == 400
+
+
+def test_add_voice_rejects_non_audio_extension(tmp_path: Path) -> None:
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"not audio")
+
+    client = _client(voices_dir=tmp_path)
+    response = client.post("/api/voices", headers=_headers(), json={"source": str(source), "name": "test"})
+
+    assert response.status_code == 400
+    assert "audio file" in response.json()["detail"]
+
+
+def test_add_voice_rejects_blank_name(tmp_path: Path) -> None:
+    source = tmp_path / "clip.wav"
+    source.write_bytes(b"fake audio")
+
+    client = _client(voices_dir=tmp_path)
+    response = client.post("/api/voices", headers=_headers(), json={"source": str(source), "name": "   "})
+
+    assert response.status_code == 400
+    assert "name is required" in response.json()["detail"]
+
+
+def test_add_voice_reports_clone_errors_clearly(tmp_path: Path) -> None:
+    source = tmp_path / "clip.wav"
+    source.write_bytes(b"fake audio")
+
+    def failing_clone(*args, **kwargs) -> Path:
+        raise RuntimeError("model exploded")
+
+    client = _client(voices_dir=tmp_path, clone_voice_fn=failing_clone)
+    response = client.post("/api/voices", headers=_headers(), json={"source": str(source), "name": "test"})
+
+    assert response.status_code == 400
+    assert "model exploded" in response.json()["detail"]
+
+
 # --- /api/preview ----------------------------------------------------------
 
 

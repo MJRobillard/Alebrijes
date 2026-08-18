@@ -13,9 +13,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from alebrijes.config import Config
+from alebrijes.config import AUDIO_EXTENSIONS, Config
 
-_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".wma", ".opus"}
 _DEFAULT_VOICES_DIR = Config().voices_dir
 
 
@@ -72,10 +71,10 @@ def _cmd_voices_add(args: argparse.Namespace) -> int:
     source_path = Path(args.source)
     if not source_path.exists():
         raise FileNotFoundError(f"Voice source file not found: {source_path}")
-    if source_path.suffix.lower() not in _AUDIO_EXTENSIONS:
+    if source_path.suffix.lower() not in AUDIO_EXTENSIONS:
         raise ValueError(
             f"'{source_path}' doesn't look like an audio file (expected one of: "
-            f"{', '.join(sorted(_AUDIO_EXTENSIONS))}). Voice cloning only accepts local audio "
+            f"{', '.join(sorted(AUDIO_EXTENSIONS))}). Voice cloning only accepts local audio "
             "files — no URLs or YouTube links."
         )
 

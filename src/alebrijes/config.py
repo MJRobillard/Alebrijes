@@ -15,6 +15,11 @@ from pathlib import Path
 # placeholder assignment and the GUI's voice-picker dropdown.
 BUILTIN_VOICES = ["alba", "marius", "javert", "jean", "fantine", "cosette", "eponine", "azelma"]
 
+# Extensions accepted for voice cloning (both `alebrijes voices add` and the
+# GUI's clone-a-voice form) -- local audio files only, no URLs/YouTube, by
+# design (see PHASES.md).
+AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".wma", ".opus"}
+
 
 @dataclass
 class Config:

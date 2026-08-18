@@ -41,7 +41,7 @@ from pydantic import BaseModel
 
 from alebrijes.cast import CastEntry, CastFile, load as load_cast, save as save_cast
 from alebrijes.cast.build import LOW_CONFIDENCE_THRESHOLD, build_cast_file
-from alebrijes.config import BUILTIN_VOICES, Config
+from alebrijes.config import AUDIO_EXTENSIONS, BUILTIN_VOICES, Config
 from alebrijes.ingest import Book
 from alebrijes.preview import synthesize_preview as default_synthesize_preview
 from alebrijes.render import render_book as default_render_book
@@ -98,6 +98,13 @@ class VoicesResponse(BaseModel):
     cloned: list[ClonedVoice]
 
 
+class AddVoiceRequest(BaseModel):
+    source: str
+    name: str
+    start: Optional[float] = None
+    end: Optional[float] = None
+
+
 class PreviewRequest(BaseModel):
     text: str
     voice_state_path: str
@@ -137,6 +144,23 @@ class _RenderJob:
 IngestFn = Callable[[Path], Book]
 RenderFn = Callable[..., Path]
 SynthesizePreviewFn = Callable[[str, str], bytes]
+CloneVoiceFn = Callable[[Path, str, Optional[float], Optional[float], Path], Path]
+
+
+def _default_clone_voice(
+    source_path: Path, name: str, start: Optional[float], end: Optional[float], voices_dir: Path
+) -> Path:
+    # Mirrors alebrijes.cli._cmd_voices_add's body -- duplicated rather than
+    # imported from cli.py, same reasoning as _default_ingest_book above.
+    import torch
+
+    from alebrijes.synth.agent import create_voice_state
+
+    voices_dir.mkdir(parents=True, exist_ok=True)
+    out_path = voices_dir / f"{name}.pt"
+    state = create_voice_state(source_path, clip_start=start, clip_end=end)
+    torch.save(state, out_path)
+    return out_path
 
 
 def _default_ingest_book(book_path: Path) -> Book:
@@ -162,6 +186,7 @@ def create_app(
     ingest_book: IngestFn = _default_ingest_book,
     render_fn: RenderFn = default_render_book,
     synthesize_preview_fn: SynthesizePreviewFn = default_synthesize_preview,
+    clone_voice_fn: CloneVoiceFn = _default_clone_voice,
     voices_dir: Optional[Path] = None,
 ) -> FastAPI:
     if voices_dir is None:
@@ -191,6 +216,30 @@ def create_app(
             for pt_file in sorted(voices_dir.glob("*.pt")):
                 cloned.append(ClonedVoice(name=pt_file.stem, voice_state_path=str(pt_file)))
         return VoicesResponse(builtin=list(BUILTIN_VOICES), cloned=cloned)
+
+    @app.post("/api/voices", response_model=VoicesResponse, dependencies=[Depends(_verify_request)])
+    def add_voice(payload: AddVoiceRequest) -> VoicesResponse:
+        source_path = Path(payload.source)
+        if not source_path.exists():
+            raise HTTPException(status_code=400, detail=f"Voice source file not found: {source_path}")
+        if source_path.suffix.lower() not in AUDIO_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"'{source_path}' doesn't look like an audio file (expected one of: "
+                    f"{', '.join(sorted(AUDIO_EXTENSIONS))})."
+                ),
+            )
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Voice name is required.")
+
+        try:
+            clone_voice_fn(source_path, name, payload.start, payload.end, voices_dir)
+        except Exception as exc:  # noqa: BLE001 - reported to the client, not swallowed
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return voices()
 
     @app.post("/api/preview", dependencies=[Depends(_verify_request)])
     def preview(payload: PreviewRequest) -> Response:
