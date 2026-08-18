@@ -149,8 +149,31 @@ documented future refinement, not built yet). `create_app()` takes
 injectable `ingest_book`/`render_fn` so tests don't need the real pocket-tts
 model loaded.
 
-Remaining work: the pywebview shell itself (the frontend HTML/JS + the
-window that embeds the token/port and loads it) — nothing built yet.
+**Shell done** (`alebrijes/gui.py`, `alebrijes/frontend/index.html`):
+launcher starts the server thread, then opens a pywebview window navigated
+to `http://host:port/?token=...` (the Jupyter token-in-URL pattern) — the
+index route is deliberately unauthenticated (the page has to load before it
+can present a token) but verified to never leak the server's own token into
+that response. A single-file vanilla-JS frontend (no framework) covers the
+full flow: choose book (native OS file dialog via `FileApi.pick_file`,
+routed outside the HTTP API since it's an OS-shell capability, not
+application logic) → build cast → **review/edit each character's voice
+inline, save** (new `PUT /api/cast`) → render with live chapter-progress
+polling. `alebrijes gui` / `alebrijes-gui` both launch it.
+
+**Not yet verified**: actual pywebview window rendering on a real Mac or
+Windows machine — this sandbox is Linux without PyGObject installed for the
+GTK backend, and Linux isn't a shipping target anyway, so this genuinely
+needs a manual check on real hardware before Phase 3 is considered done.
+Everything that *could* be verified here for real was: the server on an
+actual socket, the index route's behavior and token-leak safety, and the
+frontend JS's syntax.
+
+Remaining work beyond that real-machine check: the render-progress bar is
+chapter-granularity only (matches the backend's current resolution); no
+inline playback of low-confidence lines yet (the review list shows text +
+confidence, not audio preview) — both documented as known v1 gaps, not
+oversights.
 
 **Verification:** manual walkthrough — open a book, review/adjust cast,
 render (watching live progress over the local API) — with no script editing
