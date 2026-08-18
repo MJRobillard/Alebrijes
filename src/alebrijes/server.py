@@ -40,6 +40,7 @@ from pydantic import BaseModel
 
 from alebrijes.cast import CastEntry, CastFile, load as load_cast, save as save_cast
 from alebrijes.cast.build import LOW_CONFIDENCE_THRESHOLD, build_cast_file
+from alebrijes.config import BUILTIN_VOICES, Config
 from alebrijes.ingest import Book
 from alebrijes.render import render_book as default_render_book
 
@@ -83,6 +84,16 @@ class CastResponse(BaseModel):
 class CastUpdateRequest(BaseModel):
     cast_path: str
     entries: list[CastEntryModel]
+
+
+class ClonedVoice(BaseModel):
+    name: str
+    voice_state_path: str
+
+
+class VoicesResponse(BaseModel):
+    builtin: list[str]
+    cloned: list[ClonedVoice]
 
 
 class RenderRequest(BaseModel):
@@ -137,7 +148,10 @@ def create_app(
     allowed_origin: str = "http://127.0.0.1",
     ingest_book: IngestFn = _default_ingest_book,
     render_fn: RenderFn = default_render_book,
+    voices_dir: Optional[Path] = None,
 ) -> FastAPI:
+    if voices_dir is None:
+        voices_dir = Config().voices_dir
     app = FastAPI(title="alebrijes")
     jobs: dict[str, _RenderJob] = {}
 
@@ -152,6 +166,14 @@ def create_app(
     @app.get("/api/health", dependencies=[Depends(_verify_request)])
     def health() -> dict:
         return {"status": "ok"}
+
+    @app.get("/api/voices", response_model=VoicesResponse, dependencies=[Depends(_verify_request)])
+    def voices() -> VoicesResponse:
+        cloned = []
+        if voices_dir.exists():
+            for pt_file in sorted(voices_dir.glob("*.pt")):
+                cloned.append(ClonedVoice(name=pt_file.stem, voice_state_path=str(pt_file)))
+        return VoicesResponse(builtin=list(BUILTIN_VOICES), cloned=cloned)
 
     @app.post("/api/cast", response_model=CastResponse, dependencies=[Depends(_verify_request)])
     def cast(payload: CastRequest) -> CastResponse:

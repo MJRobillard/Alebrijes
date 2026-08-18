@@ -13,25 +13,24 @@ from dataclasses import dataclass
 from alebrijes.attribute import Attribution
 from alebrijes.attribute.rules import UNKNOWN, RuleBasedAttributor
 from alebrijes.cast import CastEntry, CastFile
+from alebrijes.config import BUILTIN_VOICES
 from alebrijes.ingest import Book
 from alebrijes.segment import segment_paragraph
 
 NARRATOR = "Narrator"
 LOW_CONFIDENCE_THRESHOLD = 0.5
 
-# Placeholder voice assignment: a deterministic pick from pocket-tts's built-in
-# voices, ported from pocket-tts-agent's examples/multi_ci_tts.py
-# (_assign_voice_for_speaker). Meant to be overridden with real cloned voices
-# in the cast file before rendering — this just gives every detected
-# character *something* distinct out of the box.
-_BUILTIN_VOICE_POOL = ["alba", "marius", "javert", "jean", "fantine", "cosette", "eponine", "azelma"]
-
 
 def _voice_for(character: str) -> str:
+    # Placeholder voice assignment: a deterministic pick from pocket-tts's
+    # built-in voices, ported from pocket-tts-agent's examples/multi_ci_tts.py
+    # (_assign_voice_for_speaker). Meant to be overridden with real cloned
+    # voices before rendering — this just gives every detected character
+    # *something* distinct out of the box.
     if character == NARRATOR:
-        return _BUILTIN_VOICE_POOL[0]
+        return BUILTIN_VOICES[0]
     digest = hashlib.md5(character.lower().encode("utf-8")).hexdigest()
-    return _BUILTIN_VOICE_POOL[int(digest, 16) % len(_BUILTIN_VOICE_POOL)]
+    return BUILTIN_VOICES[int(digest, 16) % len(BUILTIN_VOICES)]
 
 
 @dataclass

@@ -13,8 +13,10 @@ import argparse
 import sys
 from pathlib import Path
 
+from alebrijes.config import Config
+
 _AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".wma", ".opus"}
-_DEFAULT_VOICES_DIR = Path.home() / ".local" / "share" / "alebrijes" / "voices"
+_DEFAULT_VOICES_DIR = Config().voices_dir
 
 
 def _ingest_book(book_path: Path):

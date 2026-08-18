@@ -94,6 +94,38 @@ def test_index_route_does_not_leak_the_server_token() -> None:
     assert TOKEN not in response.text
 
 
+# --- /api/voices ---------------------------------------------------------
+
+
+def test_voices_endpoint_returns_builtin_voices_when_no_clones_exist(tmp_path: Path) -> None:
+    client = _client(voices_dir=tmp_path / "empty")
+    response = client.get("/api/voices", headers=_headers())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "alba" in body["builtin"]
+    assert body["cloned"] == []
+
+
+def test_voices_endpoint_lists_cloned_voices_from_directory(tmp_path: Path) -> None:
+    (tmp_path / "narrator_clone.pt").write_bytes(b"fake-state")
+    (tmp_path / "villain_clone.pt").write_bytes(b"fake-state")
+
+    client = _client(voices_dir=tmp_path)
+    response = client.get("/api/voices", headers=_headers())
+
+    body = response.json()
+    names = {entry["name"] for entry in body["cloned"]}
+    assert names == {"narrator_clone", "villain_clone"}
+    assert all(Path(entry["voice_state_path"]).exists() for entry in body["cloned"])
+
+
+def test_voices_endpoint_requires_token(tmp_path: Path) -> None:
+    client = _client(voices_dir=tmp_path)
+    response = client.get("/api/voices")
+    assert response.status_code == 403
+
+
 # --- /api/cast -----------------------------------------------------------
 
 

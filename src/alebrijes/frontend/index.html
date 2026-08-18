@@ -71,7 +71,7 @@
   table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
   th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); font-size: 0.9rem; }
   th { color: var(--ink-soft); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; }
-  input[type=text] {
+  input[type=text], select {
     font: inherit;
     width: 100%;
     padding: 0.3rem 0.5rem;
@@ -172,19 +172,56 @@
   const saveCastRow = document.getElementById("save-cast-row");
   const saveCastStatusEl = document.getElementById("save-cast-status");
 
-  function renderCastTable(entries) {
+  function buildVoiceSelect(currentPath, voices) {
+    const select = document.createElement("select");
+    select.dataset.voicePath = currentPath;
+
+    const knownPaths = new Set(voices.builtin);
+    voices.cloned.forEach(function (v) { knownPaths.add(v.voice_state_path); });
+
+    if (!knownPaths.has(currentPath)) {
+      const currentOpt = document.createElement("option");
+      currentOpt.value = currentPath;
+      currentOpt.textContent = "Current: " + currentPath;
+      select.appendChild(currentOpt);
+    }
+
+    const builtinGroup = document.createElement("optgroup");
+    builtinGroup.label = "Built-in";
+    voices.builtin.forEach(function (name) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      builtinGroup.appendChild(opt);
+    });
+    select.appendChild(builtinGroup);
+
+    const clonedGroup = document.createElement("optgroup");
+    clonedGroup.label = voices.cloned.length
+      ? "Cloned"
+      : "Cloned (none yet — run: alebrijes voices add --source <audio file> --name <name>)";
+    voices.cloned.forEach(function (v) {
+      const opt = document.createElement("option");
+      opt.value = v.voice_state_path;
+      opt.textContent = v.name;
+      clonedGroup.appendChild(opt);
+    });
+    select.appendChild(clonedGroup);
+
+    select.value = currentPath;
+    return select;
+  }
+
+  function renderCastTable(entries, voices) {
     castRows.innerHTML = "";
-    entries.forEach(function (entry, index) {
+    entries.forEach(function (entry) {
       const tr = document.createElement("tr");
       const nameTd = document.createElement("td");
       nameTd.textContent = entry.character;
       const voiceTd = document.createElement("td");
-      const input = document.createElement("input");
-      input.type = "text";
-      input.value = entry.voice_state_path;
-      input.dataset.character = entry.character;
-      input.dataset.index = index;
-      voiceTd.appendChild(input);
+      const select = buildVoiceSelect(entry.voice_state_path, voices);
+      select.dataset.character = entry.character;
+      voiceTd.appendChild(select);
       tr.appendChild(nameTd);
       tr.appendChild(voiceTd);
       castRows.appendChild(tr);
@@ -217,11 +254,16 @@
 
   document.getElementById("build-cast-btn").addEventListener("click", function () {
     castStatusEl.textContent = "Building cast…";
-    apiFetch("/api/cast", { method: "POST", body: JSON.stringify({ book: state.bookPath }) })
-      .then(function (result) {
+    Promise.all([
+      apiFetch("/api/cast", { method: "POST", body: JSON.stringify({ book: state.bookPath }) }),
+      apiFetch("/api/voices"),
+    ])
+      .then(function (results) {
+        const result = results[0];
+        const voices = results[1];
         state.castPath = result.cast_path;
         castStatusEl.textContent = "Cast written to " + result.cast_path;
-        renderCastTable(result.entries);
+        renderCastTable(result.entries, voices);
         renderReviewLines(result.low_confidence_lines);
         renderSection.removeAttribute("disabled");
       })
@@ -231,8 +273,8 @@
   });
 
   document.getElementById("save-cast-btn").addEventListener("click", function () {
-    const entries = Array.from(castRows.querySelectorAll("input[type=text]")).map(function (input) {
-      return { character: input.dataset.character, voice_state_path: input.value };
+    const entries = Array.from(castRows.querySelectorAll("select")).map(function (select) {
+      return { character: select.dataset.character, voice_state_path: select.value };
     });
     saveCastStatusEl.textContent = "Saving…";
     apiFetch("/api/cast", { method: "PUT", body: JSON.stringify({ cast_path: state.castPath, entries: entries }) })
