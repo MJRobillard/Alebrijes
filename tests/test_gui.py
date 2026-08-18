@@ -35,20 +35,20 @@ def test_file_api_pick_file_returns_none_when_dialog_cancelled(monkeypatch) -> N
     assert result is None
 
 
-def test_file_api_pick_audio_file_returns_first_selected_path(monkeypatch) -> None:
+def test_file_api_pick_voice_file_returns_first_selected_path(monkeypatch) -> None:
     captured_file_types = []
 
     def fake_dialog(dialog_type, file_types=()):
         captured_file_types.append(file_types)
-        return ("/home/user/voice.wav",)
+        return ("/home/user/narrator.pt",)
 
     fake_window = types.SimpleNamespace(create_file_dialog=fake_dialog)
     fake_file_dialog = types.SimpleNamespace(OPEN="OPEN")
     fake_webview_module = types.SimpleNamespace(windows=[fake_window], FileDialog=fake_file_dialog)
     monkeypatch.setitem(sys.modules, "webview", fake_webview_module)
 
-    result = FileApi().pick_audio_file()
+    result = FileApi().pick_voice_file()
 
-    assert result == "/home/user/voice.wav"
-    assert "*.wav" in captured_file_types[0][0]
+    assert result == "/home/user/narrator.pt"
+    assert "*.pt" in captured_file_types[0][0]
     assert "*.epub" not in captured_file_types[0][0]

@@ -130,26 +130,25 @@
     </div>
   </section>
 
-  <section id="clone-voice-section">
-    <h2>Clone a voice <span class="badge">optional</span></h2>
+  <section id="import-voice-section">
+    <h2>Import a voice <span class="badge">optional</span></h2>
     <p class="hint">
-      A clean, single-speaker recording works best. pocket-tts's own guidance says even
-      ~5 seconds can work, but a longer sample — roughly 20–30 seconds, with some natural
-      variation in tone rather than one flat sentence — tends to produce a more expressive,
-      less monotone clone. Avoid background music/noise and overlapping speakers. Use
-      Start/End below to trim to just the clean part of a longer recording.
+      Import an existing voice-state (<code>.pt</code>) file. This app doesn't clone voices
+      from audio itself — that needs pocket-tts's gated cloning model, which isn't bundled
+      here to keep setup simple (no account, no login). To create a <code>.pt</code> file
+      from an audio sample, use the <code>alebrijes voices add</code> command on a source
+      install (a one-time Hugging Face login is required there — see the README), then
+      import the result here.
     </p>
     <div class="row">
-      <button id="choose-audio-btn">Choose Audio File…</button>
-      <span id="audio-path" class="path">No audio file selected.</span>
+      <button id="choose-voice-file-btn">Choose Voice File (.pt)…</button>
+      <span id="voice-file-path" class="path">No file selected.</span>
     </div>
     <div class="row" style="margin-top: 0.6rem;">
       <input type="text" id="voice-name-input" placeholder="Voice name (e.g. narrator)" style="max-width: 220px;">
-      <input type="number" id="voice-start-input" placeholder="Start (s)" step="0.1" style="max-width: 110px;">
-      <input type="number" id="voice-end-input" placeholder="End (s)" step="0.1" style="max-width: 110px;">
-      <button id="clone-voice-btn">Clone Voice</button>
+      <button id="import-voice-btn">Import Voice</button>
     </div>
-    <div id="clone-voice-status" class="status" style="margin-top: 0.5rem;"></div>
+    <div id="import-voice-status" class="status" style="margin-top: 0.5rem;"></div>
   </section>
 
   <section id="cast-section" disabled>
@@ -228,54 +227,47 @@
     });
   });
 
-  const audioPathEl = document.getElementById("audio-path");
-  const cloneVoiceStatusEl = document.getElementById("clone-voice-status");
-  state.audioPath = null;
+  const voiceFilePathEl = document.getElementById("voice-file-path");
+  const importVoiceStatusEl = document.getElementById("import-voice-status");
+  state.voiceFilePath = null;
 
-  document.getElementById("choose-audio-btn").addEventListener("click", function () {
+  document.getElementById("choose-voice-file-btn").addEventListener("click", function () {
     withPywebviewApi(function () {
-      window.pywebview.api.pick_audio_file().then(function (path) {
+      window.pywebview.api.pick_voice_file().then(function (path) {
         if (!path) return;
-        state.audioPath = path;
-        audioPathEl.textContent = path;
+        state.voiceFilePath = path;
+        voiceFilePathEl.textContent = path;
       });
     });
   });
 
-  document.getElementById("clone-voice-btn").addEventListener("click", function () {
+  document.getElementById("import-voice-btn").addEventListener("click", function () {
     const name = document.getElementById("voice-name-input").value.trim();
-    const startRaw = document.getElementById("voice-start-input").value;
-    const endRaw = document.getElementById("voice-end-input").value;
 
-    if (!state.audioPath) {
-      cloneVoiceStatusEl.className = "status error";
-      cloneVoiceStatusEl.textContent = "Choose an audio file first.";
+    if (!state.voiceFilePath) {
+      importVoiceStatusEl.className = "status error";
+      importVoiceStatusEl.textContent = "Choose a voice-state (.pt) file first.";
       return;
     }
     if (!name) {
-      cloneVoiceStatusEl.className = "status error";
-      cloneVoiceStatusEl.textContent = "Enter a voice name.";
+      importVoiceStatusEl.className = "status error";
+      importVoiceStatusEl.textContent = "Enter a voice name.";
       return;
     }
 
-    cloneVoiceStatusEl.className = "status";
-    cloneVoiceStatusEl.textContent = "Cloning voice…";
+    importVoiceStatusEl.className = "status";
+    importVoiceStatusEl.textContent = "Importing voice…";
     apiFetch("/api/voices", {
       method: "POST",
-      body: JSON.stringify({
-        source: state.audioPath,
-        name: name,
-        start: startRaw === "" ? null : parseFloat(startRaw),
-        end: endRaw === "" ? null : parseFloat(endRaw),
-      }),
+      body: JSON.stringify({ source: state.voiceFilePath, name: name }),
     })
       .then(function () {
-        cloneVoiceStatusEl.className = "status done";
-        cloneVoiceStatusEl.textContent = "Cloned \"" + name + "\" — available in the voice dropdowns below.";
+        importVoiceStatusEl.className = "status done";
+        importVoiceStatusEl.textContent = "Imported \"" + name + "\" — available in the voice dropdowns below.";
       })
       .catch(function (err) {
-        cloneVoiceStatusEl.className = "status error";
-        cloneVoiceStatusEl.textContent = "Error: " + err.message;
+        importVoiceStatusEl.className = "status error";
+        importVoiceStatusEl.textContent = "Error: " + err.message;
       });
   });
 
