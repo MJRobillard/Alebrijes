@@ -22,7 +22,6 @@ import threading
 from typing import Optional
 
 from alebrijes.config import AUDIO_EXTENSIONS
-from alebrijes.server import create_app, find_free_port, generate_token
 
 _BOOK_FILE_TYPES = ("Book files (*.epub;*.pdf;*.txt)", "All files (*.*)")
 _AUDIO_FILE_TYPES = (
@@ -55,10 +54,17 @@ def build_launch_url(host: str, port: int, token: str) -> str:
 
 
 def main() -> None:
+    # Must happen before anything imports huggingface_hub (transitively,
+    # before anything imports pocket_tts) -- see hf_bundle.py's docstring.
+    from alebrijes.hf_bundle import configure_bundled_hf_cache
+
+    configure_bundled_hf_cache()
+
     import uvicorn
     import webview
 
     from alebrijes.diagnostics import torch_build_warning
+    from alebrijes.server import create_app, find_free_port, generate_token
 
     warning = torch_build_warning()
     if warning:

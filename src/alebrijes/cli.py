@@ -171,6 +171,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Must happen before anything imports huggingface_hub (transitively,
+    # before anything imports pocket_tts) -- see hf_bundle.py's docstring.
+    from alebrijes.hf_bundle import configure_bundled_hf_cache
+
+    configure_bundled_hf_cache()
+
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)
