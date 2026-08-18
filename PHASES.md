@@ -64,6 +64,17 @@ pocket-tts-agent's four overlapping scripts (`tts-menu`, `ci-tts`,
 `ci-tts-from-epub`, `epub-reader`). Installable and usable end to end with no
 GUI.
 
+`cast` and `render` are done — `alebrijes cast book.epub` followed by
+`alebrijes render book.epub --cast cast.yaml` was verified for real (a local
+pocket-tts model + ffmpeg, not just unit tests) against a fixture book: a
+correctly-chaptered, multi-voice `.m4b` with per-line voice switching between
+the narrator and two attributed characters. `render.py`'s multi-voice
+synthesis is sequential, not parallel (see its module docstring) — an
+accepted v1 trade-off, revisit if render time becomes a real bottleneck on
+full-length books. `voices` (create/manage cloned voice states from local
+files or remote clips) is the one remaining stub, and EPUB is still the only
+supported ingest format.
+
 **Verification:** `pipx install .` (or `uv tool install .`) from a fresh
 clone, then `alebrijes cast book.epub` followed by `alebrijes render
 book.epub --cast cast.yaml` produces a playable `.m4b`, with no source
