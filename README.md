@@ -28,9 +28,25 @@ done, and what's next.
 
 ## Install
 
-**Install the CPU-only torch build first, then everything else** — this
-matters: `pip install -e ".[dev]"` alone pulls torch from the default PyPI
-index with no preference for CPU vs. CUDA, and on a machine with a
+**Use a dedicated virtual environment** — not your global/system Python.
+Confirmed on a real test machine that already had other CUDA-pinned ML
+tooling installed (`unsloth-zoo`, `xformers`, `torchaudio`, `torchvision`):
+installing into the global environment both pulled in a CUDA torch build
+this project doesn't want (see below) *and* broke those other projects'
+pinned CUDA torch versions when corrected. A venv isolates Alebrijes from
+whatever else is on the machine, in both directions.
+
+```bash
+python -m venv .venv
+# macOS/Linux:
+source .venv/bin/activate
+# Windows (PowerShell):
+.venv\Scripts\Activate.ps1
+```
+
+**Then install the CPU-only torch build first, before everything else** —
+this matters: `pip install -e ".[dev]"` alone pulls torch from the default
+PyPI index with no preference for CPU vs. CUDA, and on a machine with a
 CUDA-capable Python/OS combination but no actual NVIDIA GPU, that resolves to
 a CUDA build carrying real, needless size and load-time overhead (confirmed
 on a real Windows test machine: `torch==2.6.0+cu118` installed with
