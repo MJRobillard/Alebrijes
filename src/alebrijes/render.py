@@ -30,6 +30,7 @@ import numpy as np
 
 from alebrijes.attribute.rules import UNKNOWN, RuleBasedAttributor
 from alebrijes.cast import CastFile
+from alebrijes.ffmpeg_util import find_ffmpeg
 from alebrijes.ingest import Book, Chapter
 from alebrijes.segment import Span, SpanKind, segment_paragraph
 from alebrijes.synth.agent import TTSAgent, write_wav_array
@@ -159,12 +160,7 @@ def render_book(
     # gets deleted by the `finally` below regardless. Check up front instead
     # so a missing ffmpeg fails in milliseconds, not after however long a
     # full multi-chapter render takes.
-    if shutil.which("ffmpeg") is None:
-        raise RuntimeError(
-            "ffmpeg is required to build the final .m4b but was not found on PATH. "
-            "Install it first: `winget install ffmpeg` (Windows), `brew install ffmpeg` (macOS), "
-            "or your distro's package manager (Linux)."
-        )
+    find_ffmpeg()
 
     if model is None:
         from pocket_tts import TTSModel

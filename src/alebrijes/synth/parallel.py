@@ -212,7 +212,8 @@ def build_m4b(
     """Concatenates per-chapter WAVs into a chaptered M4B audiobook.
 
     `part_paths` and `chapter_titles` must be the same length and in the
-    desired chapter order. Requires `ffmpeg` on PATH.
+    desired chapter order. Uses the ffmpeg bundled via `imageio-ffmpeg`
+    (see `alebrijes.ffmpeg_util`), not a system install.
     """
     if not part_paths:
         raise ValueError("No audio files were provided to build an M4B from.")
@@ -221,9 +222,9 @@ def build_m4b(
             f"part_paths ({len(part_paths)}) and chapter_titles ({len(chapter_titles)}) must be the same length."
         )
 
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        raise RuntimeError("ffmpeg is required to build an M4B but was not found on PATH.")
+    from alebrijes.ffmpeg_util import find_ffmpeg
+
+    ffmpeg = find_ffmpeg()
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     staging_dir = Path(tempfile.mkdtemp(prefix="pocket_tts_m4b_"))

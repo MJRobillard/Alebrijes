@@ -19,6 +19,7 @@ dependencies = [
   "fastapi",
   "uvicorn[standard]",
   "pywebview",
+  "imageio-ffmpeg",  # bundles a real static ffmpeg binary -- no system install needed
 ]
 
 [project.optional-dependencies]

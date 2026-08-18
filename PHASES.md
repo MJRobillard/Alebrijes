@@ -216,11 +216,14 @@ sizing this out concretely:
   torch (~190MB — the CUDA build this dev machine happened to have installed
   is 1.8GB and irrelevant; no consumer Mac has an NVIDIA GPU and Apple
   Silicon uses MPS, not CUDA) + the pocket-tts model weights (~225MB,
-  measured) + spacy/ffmpeg/numpy/scipy/etc. comes to roughly **550–700MB**
-  total — a real but ordinary download. Given this project's whole
-  differentiator is "local and private," a single "it just works, no
-  internet needed after install" download beats a smaller installer that
-  needs a progress bar and network access before first use.
+  measured) + spacy/numpy/scipy/etc. + ffmpeg via `imageio-ffmpeg` (~20–31MB,
+  confirmed per-platform wheel sizes — a bit smaller than the original
+  ~50–80MB ffmpeg estimate, since this replaced a separately-fetched static
+  binary) comes to roughly **550–700MB** total — a real but ordinary
+  download. Given this project's whole differentiator is "local and
+  private," a single "it just works, no internet needed after install"
+  download beats a smaller installer that needs a progress bar and network
+  access before first use.
 - **The build venv must install CPU-only torch explicitly** — confirmed for
   real (Windows test, Phase 3 verification): a plain `pip install` in a
   fresh venv resolved a CUDA build (`torch==2.6.0+cu118`) with no GPU to use
@@ -259,7 +262,13 @@ install time. Built separately on `macos-latest` and `windows-latest` GitHub
 Actions runners — a Mac app can't be cross-built from Windows or vice versa.
 
 1. `pyinstaller` (onedir) bundles the FastAPI backend + pywebview shell +
-   torch/spacy/pocket-tts weights/ffmpeg into a platform-specific app folder.
+   torch/spacy/pocket-tts weights into a platform-specific app folder.
+   ffmpeg no longer needs its own fetch-and-verify CI step — it's bundled
+   automatically as a real static binary via the `imageio-ffmpeg` pip
+   dependency (confirmed working: has AAC encoding, wheels for all three
+   target platforms), the same mechanism a source install already uses.
+   `pyinstaller` needs `--collect-data imageio_ffmpeg` to pick up the
+   package's bundled binary.
 2. **macOS**: `codesign` the `.app` with the Developer ID cert → `xcrun
    notarytool submit` → `xcrun stapler staple` (ticket must be stapled, not
    just submitted, so the app still passes Gatekeeper offline) → wrap in a

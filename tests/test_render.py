@@ -193,7 +193,10 @@ def test_render_book_fails_fast_when_ffmpeg_missing_before_any_synthesis(
     from alebrijes.ingest import Book
     from alebrijes.render import render_book
 
-    monkeypatch.setattr("alebrijes.render.shutil.which", lambda name: None)
+    def _raise():
+        raise RuntimeError("ffmpeg could not be located via imageio-ffmpeg: fake failure")
+
+    monkeypatch.setattr("alebrijes.render.find_ffmpeg", _raise)
 
     # No model= passed on purpose: if the ffmpeg check didn't run first,
     # this would go on to actually load the real pocket-tts model (slow,
@@ -203,5 +206,5 @@ def test_render_book_fails_fast_when_ffmpeg_missing_before_any_synthesis(
     book = Book(title="Fixture", chapters=[])
     cast_file = CastFile(book_title="Fixture", entries=[CastEntry(character=NARRATOR, voice_state_path="alba")])
 
-    with pytest.raises(RuntimeError, match="ffmpeg is required"):
+    with pytest.raises(RuntimeError, match="could not be located"):
         render_book(book, cast_file, tmp_path / "out.m4b")

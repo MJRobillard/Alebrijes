@@ -28,16 +28,6 @@ done, and what's next.
 
 ## Install
 
-**`ffmpeg` must be on PATH** — not pip-installable, not bundled yet (that's
-a Phase 4 packaging concern), and needed for the final `.m4b` build step.
-`alebrijes render` checks for it up front and fails fast with a clear error
-if it's missing, rather than after synthesizing every chapter first.
-
-```bash
-winget install ffmpeg     # Windows
-brew install ffmpeg       # macOS
-```
-
 **Use a dedicated virtual environment** — not your global/system Python.
 Confirmed on a real test machine that already had other CUDA-pinned ML
 tooling installed (`unsloth-zoo`, `xformers`, `torchaudio`, `torchvision`):
@@ -73,6 +63,13 @@ python -m spacy download en_core_web_sm  # required for alebrijes.attribute
 If you skip this and end up with a CUDA build anyway, `alebrijes gui` and
 `/api/health` both surface a warning about it (`alebrijes/diagnostics.py`) —
 not silent, just not prevented by default.
+
+**`ffmpeg` is handled automatically** — bundled via the `imageio-ffmpeg`
+pip package (a real static binary, not a system dependency), so the `pip
+install -e ".[dev]"` step above is all that's needed. No `winget`/`brew`
+step, and this is also how Phase 4's packaged installer will get it — same
+mechanism for a source install and the shipped app, not two different
+answers to "where does ffmpeg come from."
 
 ## Testing
 
