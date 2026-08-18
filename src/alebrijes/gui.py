@@ -32,7 +32,7 @@ class FileApi:
         import webview
 
         window = webview.windows[0]
-        result = window.create_file_dialog(webview.OPEN_DIALOG, file_types=_BOOK_FILE_TYPES)
+        result = window.create_file_dialog(webview.FileDialog.OPEN, file_types=_BOOK_FILE_TYPES)
         if not result:
             return None
         return result[0]
