@@ -1,0 +1,36 @@
+[project]
+name = "alebrijes"
+version = "0.1.0"
+description = "Local, multi-voice book-to-audiobook engine: cloned voices cast to characters via rule-based speaker attribution."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Contributors" }
+]
+dependencies = [
+  "pocket-tts",
+  "scipy",
+  "numpy",
+  "pypdf",
+  "rich",
+  "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+]
+
+[project.scripts]
+alebrijes = "alebrijes.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Test / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated audio / voice state / caches — never committed
+*.wav
+*.m4b
+*.mp3
+*.pt
+*.PT
+.tts_cache/
+output/
+voice_prompts_cache/
+
+# Local env
+.env
+.DS_Store
