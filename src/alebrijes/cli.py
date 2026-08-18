@@ -1,15 +1,16 @@
 """`alebrijes` command-line entry point.
 
-Skeleton only: subcommands are wired up so `alebrijes --help` documents the
-intended surface (Phase 2's exit criteria — one installable command replacing
-pocket-tts-agent's four overlapping scripts), but each body is a stub until
-the ingest/segment/attribute stages are implemented.
+Subcommands are wired up so `alebrijes --help` documents the intended surface
+(Phase 2's exit criteria — one installable command replacing pocket-tts-agent's
+four overlapping scripts). `voices` and `render` are still stubs; `cast` is
+implemented: ingest -> segment -> attribute -> a reviewable cast.yaml.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 
 def _cmd_voices(args: argparse.Namespace) -> int:
@@ -17,7 +18,34 @@ def _cmd_voices(args: argparse.Namespace) -> int:
 
 
 def _cmd_cast(args: argparse.Namespace) -> int:
-    raise NotImplementedError("`alebrijes cast` (run attribution, write a cast.yaml for review) not yet implemented.")
+    from alebrijes.cast import save
+    from alebrijes.cast.build import LOW_CONFIDENCE_THRESHOLD, build_cast_file
+
+    book_path = Path(args.book)
+    if book_path.suffix.lower() != ".epub":
+        raise NotImplementedError(
+            f"Ingest for '{book_path.suffix}' files is not yet implemented; only .epub is supported so far."
+        )
+
+    from alebrijes.ingest.epub import parse
+
+    book = parse(book_path)
+    result = build_cast_file(book)
+
+    out_path = Path(args.out) if args.out else book_path.with_suffix(".cast.yaml")
+    save(result.cast_file, out_path)
+
+    print(f"Wrote cast file: {out_path}")
+    print(f"Characters found: {len(result.cast_file.entries)}")
+
+    low_confidence = result.low_confidence()
+    if low_confidence:
+        print(f"{len(low_confidence)} line(s) need review (confidence < {LOW_CONFIDENCE_THRESHOLD}):")
+        for attribution in low_confidence[:10]:
+            preview = attribution.span.text[:60]
+            print(f"  [{attribution.confidence:.2f}] {attribution.character}: {preview!r}")
+
+    return 0
 
 
 def _cmd_render(args: argparse.Namespace) -> int:
@@ -33,6 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     cast = subparsers.add_parser("cast", help="Run attribution and write an editable cast file.")
     cast.add_argument("book", help="Path to an epub/pdf/txt source file.")
+    cast.add_argument("--out", help="Where to write the cast file (default: <book>.cast.yaml).")
     cast.set_defaults(func=_cmd_cast)
 
     render = subparsers.add_parser("render", help="Synthesize and assemble a book using its cast file.")

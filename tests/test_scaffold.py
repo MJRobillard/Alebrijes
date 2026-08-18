@@ -35,13 +35,14 @@ def test_cli_help_runs() -> None:
     assert "render" in result.stdout
 
 
-def test_stub_stages_fail_loudly_not_silently() -> None:
-    from pathlib import Path
+def test_remaining_cli_stubs_fail_loudly_not_silently() -> None:
+    from alebrijes.cli import build_parser
 
-    from alebrijes.ingest.epub import parse
+    parser = build_parser()
+    args = parser.parse_args(["voices"])
 
     with pytest.raises(NotImplementedError):
-        parse(Path("nonexistent.epub"))
+        args.func(args)
 
 
 def test_cast_file_round_trips(tmp_path) -> None:
