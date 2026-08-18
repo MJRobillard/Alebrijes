@@ -24,6 +24,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -143,7 +144,15 @@ def render_book(
     *,
     pause_ms: int = DEFAULT_PAUSE_MS,
     model: object | None = None,
+    on_chapter_done: Callable[[int, int], None] | None = None,
 ) -> Path:
+    """Renders `book` with `cast_file`'s voices to a chaptered .m4b at `output_path`.
+
+    `on_chapter_done(completed, total)` is called after each chapter finishes
+    synthesizing — chapter-level granularity only (not per-line), since that's
+    what's available without restructuring `synthesize_chapter`'s sequential
+    loop. Good enough for a progress bar; not real-time per-line progress.
+    """
     if model is None:
         from pocket_tts import TTSModel
 
@@ -160,6 +169,7 @@ def render_book(
     try:
         part_paths: list[Path] = []
         chapter_titles: list[str] = []
+        total_chapters = len(book.chapters)
         for chapter in book.chapters:
             voiced_spans = resolve_chapter_spans(chapter, cast_file)
             audio = synthesize_chapter(voiced_spans, voice_states, agent, pause_ms=pause_ms)
@@ -168,6 +178,8 @@ def render_book(
             write_wav_array(part_path, agent.sample_rate, audio)
             part_paths.append(part_path)
             chapter_titles.append(chapter.title or f"Chapter {chapter.index + 1}")
+            if on_chapter_done is not None:
+                on_chapter_done(len(part_paths), total_chapters)
 
         return build_m4b(part_paths, chapter_titles, output_path, book_title=book.title)
     finally:

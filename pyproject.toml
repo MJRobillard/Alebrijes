@@ -16,12 +16,15 @@ dependencies = [
   "pyyaml",
   "spacy",
   "soundfile",  # pocket-tts needs this to read non-WAV audio (mp3/m4a/etc. voice clones)
+  "fastapi",
+  "uvicorn[standard]",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest",
   "reportlab",  # generates tiny real PDFs for ingest.pdf tests only
+  "httpx",  # required by fastapi.testclient.TestClient
 ]
 
 [project.scripts]
