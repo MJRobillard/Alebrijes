@@ -35,14 +35,14 @@ def test_cli_help_runs() -> None:
     assert "render" in result.stdout
 
 
-def test_remaining_cli_stubs_fail_loudly_not_silently() -> None:
-    from alebrijes.cli import build_parser
+def test_unsupported_ingest_format_fails_loudly_not_silently(tmp_path) -> None:
+    from alebrijes.cli import _ingest_book
 
-    parser = build_parser()
-    args = parser.parse_args(["voices"])
+    unsupported = tmp_path / "book.docx"
+    unsupported.write_text("not a supported format")
 
-    with pytest.raises(NotImplementedError):
-        args.func(args)
+    with pytest.raises(NotImplementedError, match="docx"):
+        _ingest_book(unsupported)
 
 
 def test_cast_file_round_trips(tmp_path) -> None:

@@ -7,17 +7,37 @@ fallback some EPUBs need). Left behind: that file's `--book` multi-book
 omnibus filtering — it was built for one specific omnibus EPUB in the old
 repo's `input/` folder (numbered top-level directories per sub-book), not
 general EPUB support, and can be ported later if a real omnibus book needs it.
+
+Real-world EPUBs vary more than the spec suggests, so this also guards
+against the common failure modes documented by ebooklib/epubcheck issue
+trackers and DRM tooling:
+
+- **DRM** (Adobe ADEPT / similar): the zip itself still opens fine — only the
+  content inside is encrypted, which would otherwise surface as a confusing
+  garbled-text or XML-parse failure deep in chapter extraction. Detected up
+  front via `META-INF/encryption.xml` (the same signal Calibre's DRM-removal
+  tooling keys off) and reported as a clear, actionable error instead.
+- **Malformed/missing container.xml or OPF XML**: reported as a clear error
+  rather than a raw `xml.etree.ElementTree.ParseError`.
+- **Manifest items referenced but missing from the archive** (a documented
+  ebooklib issue class): skipped rather than crashing the whole parse.
+- **Missing XML namespace declarations** in a malformed OPF (some
+  EPUB2-generation tools omit them): manifest/spine/title lookups retry with
+  a namespace wildcard before giving up.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from alebrijes.ingest import Book, Chapter, Paragraph
+
+_DRM_MARKER = "META-INF/encryption.xml"
 
 _CHAPTER_HEADER_RE = re.compile(
     r"^\s*(?:chapter|chap\.?)\s*(\d+)\b|^\s*(\d+)\s*[:.]\s+", re.IGNORECASE
@@ -70,7 +90,9 @@ class _BodyTextParser(HTMLParser):
 
     def get_text(self) -> str:
         text = "".join(self._parts)
-        lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+        lines = [
+            unicodedata.normalize("NFKC", re.sub(r"\s+", " ", line)).strip() for line in text.splitlines()
+        ]
         return "\n".join(line for line in lines if line)
 
 
@@ -81,43 +103,94 @@ def _extract_text_from_html(raw_html: bytes) -> str:
     return parser.get_text()
 
 
+def _check_not_drm_protected(archive: zipfile.ZipFile) -> None:
+    """Raises a clear error for DRM-protected EPUBs instead of a confusing
+    garbled-text or XML-parse failure deep in chapter extraction.
+
+    `META-INF/encryption.xml` marks per-file content encryption (Adobe ADEPT
+    and similar schemes) — the same signal DRM-removal tooling like Calibre's
+    DeDRM plugin keys off. The zip container and its XML metadata still open
+    fine; only the chapter content itself is unreadable, which is why this
+    needs an explicit check rather than surfacing naturally as an error.
+    """
+    if _DRM_MARKER in archive.namelist():
+        raise ValueError(
+            "This EPUB is DRM-protected (found META-INF/encryption.xml) and can't be read. "
+            "Remove DRM first (e.g. with Calibre + a DeDRM plugin) before importing."
+        )
+
+
+def _parse_xml(raw_xml: bytes, description: str) -> ET.Element:
+    try:
+        return ET.fromstring(raw_xml)
+    except ET.ParseError as exc:
+        raise ValueError(f"{description} is not valid XML: {exc}") from exc
+
+
+def _findall_with_namespace_fallback(root: ET.Element, path: str, ns: dict[str, str]) -> list[ET.Element]:
+    """Some EPUB2-generation tools omit namespace declarations in the OPF.
+
+    Retries with a namespace wildcard before giving up, rather than silently
+    returning an empty manifest/spine for an otherwise-valid file.
+    """
+    found = root.findall(path, ns)
+    if found:
+        return found
+    wildcard_path = re.sub(r"\b\w+:", "{*}", path)
+    return root.findall(wildcard_path)
+
+
 def _opf_path_from_container(archive: zipfile.ZipFile) -> str:
     try:
         container_xml = archive.read("META-INF/container.xml")
     except KeyError as exc:
         raise ValueError("EPUB is missing META-INF/container.xml") from exc
 
-    root = ET.fromstring(container_xml)
+    root = _parse_xml(container_xml, "META-INF/container.xml")
     ns = {"c": "urn:oasis:names:tc:opendocument:xmlns:container"}
-    rootfile = root.find(".//c:rootfile", ns)
-    if rootfile is None:
+    rootfiles = _findall_with_namespace_fallback(root, ".//c:rootfile", ns)
+    if not rootfiles:
         raise ValueError("EPUB container.xml has no rootfile entry")
 
-    opf_path = rootfile.attrib.get("full-path")
+    opf_path = rootfiles[0].attrib.get("full-path")
     if not opf_path:
         raise ValueError("EPUB rootfile is missing full-path")
     return opf_path
 
 
+def _read_opf(archive: zipfile.ZipFile, opf_path: str) -> bytes:
+    try:
+        return archive.read(opf_path)
+    except KeyError as exc:
+        raise ValueError(f"EPUB manifest file '{opf_path}' referenced by container.xml is missing from the archive") from exc
+
+
 def _spine_documents(archive: zipfile.ZipFile, opf_path: str) -> list[str]:
-    opf_xml = archive.read(opf_path)
-    root = ET.fromstring(opf_xml)
+    root = _parse_xml(_read_opf(archive, opf_path), opf_path)
     ns = {"opf": "http://www.idpf.org/2007/opf"}
 
-    manifest: dict[str, str] = {}
-    for item in root.findall(".//opf:manifest/opf:item", ns):
-        item_id = item.attrib.get("id")
-        href = item.attrib.get("href")
-        media_type = item.attrib.get("media-type", "")
-        if item_id and href and ("html" in media_type or href.endswith((".xhtml", ".html"))):
-            manifest[item_id] = href
-
+    archive_names = set(archive.namelist())
     opf_dir = str(Path(opf_path).parent)
     if opf_dir == ".":
         opf_dir = ""
 
+    manifest: dict[str, str] = {}
+    for item in _findall_with_namespace_fallback(root, ".//opf:manifest/opf:item", ns):
+        item_id = item.attrib.get("id")
+        href = item.attrib.get("href")
+        media_type = item.attrib.get("media-type", "")
+        if not (item_id and href and ("html" in media_type or href.endswith((".xhtml", ".html")))):
+            continue
+        resolved = str((Path(opf_dir) / href).as_posix())
+        if resolved not in archive_names:
+            # Manifest references a file that isn't actually in the archive
+            # (a documented ebooklib issue class) — skip it rather than
+            # crashing the whole parse over one bad entry.
+            continue
+        manifest[item_id] = href
+
     spine_docs: list[str] = []
-    for itemref in root.findall(".//opf:spine/opf:itemref", ns):
+    for itemref in _findall_with_namespace_fallback(root, ".//opf:spine/opf:itemref", ns):
         item_id = itemref.attrib.get("idref")
         if not item_id or item_id not in manifest:
             continue
@@ -129,7 +202,7 @@ def _spine_documents(archive: zipfile.ZipFile, opf_path: str) -> list[str]:
 
 
 def _book_title(archive: zipfile.ZipFile, opf_path: str, fallback: str) -> str:
-    match = _DC_TITLE_RE.search(archive.read(opf_path).decode("utf-8", errors="ignore"))
+    match = _DC_TITLE_RE.search(_read_opf(archive, opf_path).decode("utf-8", errors="ignore"))
     if match:
         return re.sub(r"\s+", " ", match.group(1)).strip()
     return fallback
@@ -215,7 +288,13 @@ def parse(path: Path) -> Book:
     if not path.exists():
         raise FileNotFoundError(f"EPUB not found: {path}")
 
-    with zipfile.ZipFile(path, "r") as archive:
+    try:
+        archive_handle = zipfile.ZipFile(path, "r")
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"'{path}' is not a valid EPUB (not a readable zip archive): {exc}") from exc
+
+    with archive_handle as archive:
+        _check_not_drm_protected(archive)
         opf_path = _opf_path_from_container(archive)
         spine_docs = _spine_documents(archive, opf_path)
         book_title = _book_title(archive, opf_path, fallback=path.stem)

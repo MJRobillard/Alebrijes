@@ -38,8 +38,19 @@ def test_cast_command_defaults_output_path_next_to_book(tmp_path: Path) -> None:
 
 
 def test_cast_command_rejects_unsupported_format(tmp_path: Path) -> None:
-    unsupported = tmp_path / "book.txt"
+    unsupported = tmp_path / "book.docx"
     unsupported.write_text("Some text.")
 
-    with pytest.raises(NotImplementedError, match="txt"):
+    with pytest.raises(NotImplementedError, match="docx"):
         main(["cast", str(unsupported)])
+
+
+def test_cast_command_supports_txt_books(tmp_path: Path) -> None:
+    txt_path = tmp_path / "book.txt"
+    txt_path.write_text('Colin said, "Let\'s take another path through the woods."\n', encoding="utf-8")
+
+    exit_code = main(["cast", str(txt_path)])
+
+    assert exit_code == 0
+    cast_file = load(tmp_path / "book.cast.yaml")
+    assert cast_file.voice_for("Colin")

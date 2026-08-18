@@ -39,8 +39,17 @@ def _opf(book_title: str, doc_names: list[str]) -> str:
 """
 
 
-def build_epub(path: Path, book_title: str, docs: dict[str, str]) -> None:
-    """`docs` maps spine filename -> raw XHTML body content (already includes tags)."""
+def build_epub(
+    path: Path,
+    book_title: str,
+    docs: dict[str, str],
+    extra_files: dict[str, str] | None = None,
+) -> None:
+    """`docs` maps spine filename -> raw XHTML body content (already includes tags).
+
+    `extra_files` writes additional raw entries into the zip (e.g. a DRM
+    marker file) for edge-case tests.
+    """
     doc_names = list(docs)
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("mimetype", "application/epub+zip")
@@ -48,3 +57,5 @@ def build_epub(path: Path, book_title: str, docs: dict[str, str]) -> None:
         archive.writestr("OEBPS/content.opf", _opf(book_title, doc_names))
         for name, body in docs.items():
             archive.writestr(f"OEBPS/{name}", f"<html><body>{body}</body></html>")
+        for name, content in (extra_files or {}).items():
+            archive.writestr(name, content)

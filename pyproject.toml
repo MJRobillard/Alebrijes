@@ -15,11 +15,13 @@ dependencies = [
   "rich",
   "pyyaml",
   "spacy",
+  "soundfile",  # pocket-tts needs this to read non-WAV audio (mp3/m4a/etc. voice clones)
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest",
+  "reportlab",  # generates tiny real PDFs for ingest.pdf tests only
 ]
 
 [project.scripts]
