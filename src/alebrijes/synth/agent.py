@@ -17,7 +17,14 @@ VoicePrompt = Union[str, Path]
 _DEFAULT_VOICE_CACHE_DIR = Path(tempfile.gettempdir()) / "pocket_tts_agent" / "voice_prompts"
 
 
-def _write_wav(path: Union[str, Path], sample_rate: int, audio: np.ndarray) -> None:
+def write_wav_array(path: Union[str, Path], sample_rate: int, audio: np.ndarray) -> None:
+    """Writes a raw audio array (float or int16) to a 16-bit PCM WAV file.
+
+    Public so callers assembling audio from multiple synthesize() calls (e.g.
+    a multi-voice chapter render) can write it out without reaching into
+    TTSAgent internals — see synth.agent.TTSAgent.write_wav for the
+    single-call text-to-file convenience path.
+    """
     from scipy.io import wavfile as _wavfile
 
     pcm_audio = np.asarray(audio)
@@ -29,6 +36,9 @@ def _write_wav(path: Union[str, Path], sample_rate: int, audio: np.ndarray) -> N
         pcm_audio = pcm_audio.astype(np.int16)
 
     _wavfile.write(str(path), sample_rate, pcm_audio)
+
+
+_write_wav = write_wav_array
 
 
 @dataclass
@@ -265,6 +275,15 @@ class TTSAgent:
         )
 
         state = self._model.get_state_for_audio_prompt(conditioning)
+        self._voice_cache = _VoiceCache(voice=voice, state=state)
+
+    def use_voice_state(self, voice: VoicePrompt, state: object) -> None:
+        """Switch to an already-computed voice state without recomputing it.
+
+        For rendering a multi-voice cast: one agent's cached state is swapped
+        before each line instead of resolving/recomputing per line, or
+        keeping one TTSAgent per character alive at once.
+        """
         self._voice_cache = _VoiceCache(voice=voice, state=state)
 
     def synthesize(self, text: str) -> np.ndarray:

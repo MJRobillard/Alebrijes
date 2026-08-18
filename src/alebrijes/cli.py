@@ -2,8 +2,9 @@
 
 Subcommands are wired up so `alebrijes --help` documents the intended surface
 (Phase 2's exit criteria — one installable command replacing pocket-tts-agent's
-four overlapping scripts). `voices` and `render` are still stubs; `cast` is
-implemented: ingest -> segment -> attribute -> a reviewable cast.yaml.
+four overlapping scripts). `voices` is still a stub; `cast` and `render` are
+implemented: ingest -> segment -> attribute -> a reviewable cast.yaml -> a
+rendered, chaptered .m4b.
 """
 
 from __future__ import annotations
@@ -49,7 +50,24 @@ def _cmd_cast(args: argparse.Namespace) -> int:
 
 
 def _cmd_render(args: argparse.Namespace) -> int:
-    raise NotImplementedError("`alebrijes render` (synthesize + assemble a cast.yaml into audio) not yet implemented.")
+    book_path = Path(args.book)
+    if book_path.suffix.lower() != ".epub":
+        raise NotImplementedError(
+            f"Ingest for '{book_path.suffix}' files is not yet implemented; only .epub is supported so far."
+        )
+
+    from alebrijes.cast import load
+    from alebrijes.ingest.epub import parse
+    from alebrijes.render import render_book
+
+    book = parse(book_path)
+    cast_file = load(Path(args.cast))
+    out_path = Path(args.out) if args.out else book_path.with_suffix(".m4b")
+
+    print(f"Rendering '{book.title}' ({len(book.chapters)} chapters) with cast: {args.cast}")
+    result_path = render_book(book, cast_file, out_path, pause_ms=args.pause_ms)
+    print(f"Wrote audiobook: {result_path}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -67,6 +85,8 @@ def build_parser() -> argparse.ArgumentParser:
     render = subparsers.add_parser("render", help="Synthesize and assemble a book using its cast file.")
     render.add_argument("book", help="Path to an epub/pdf/txt source file.")
     render.add_argument("--cast", required=True, help="Path to the cast.yaml produced by `alebrijes cast`.")
+    render.add_argument("--out", help="Where to write the audiobook (default: <book>.m4b).")
+    render.add_argument("--pause-ms", type=int, default=250, help="Silence between lines, in milliseconds.")
     render.set_defaults(func=_cmd_render)
 
     return parser
