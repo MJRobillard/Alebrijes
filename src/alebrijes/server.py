@@ -165,7 +165,10 @@ def create_app(
 
     @app.get("/api/health", dependencies=[Depends(_verify_request)])
     def health() -> dict:
-        return {"status": "ok"}
+        from alebrijes.diagnostics import torch_build_warning
+
+        warning = torch_build_warning()
+        return {"status": "ok", "warnings": [warning] if warning else []}
 
     @app.get("/api/voices", response_model=VoicesResponse, dependencies=[Depends(_verify_request)])
     def voices() -> VoicesResponse:

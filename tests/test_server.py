@@ -46,7 +46,9 @@ def test_correct_token_and_origin_is_allowed() -> None:
     client = _client()
     response = client.get("/api/health", headers=_headers())
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["status"] == "ok"
+    assert "warnings" in body
 
 
 def test_wrong_origin_is_rejected_even_with_correct_token() -> None:

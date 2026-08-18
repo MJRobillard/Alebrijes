@@ -46,6 +46,12 @@ def main() -> None:
     import uvicorn
     import webview
 
+    from alebrijes.diagnostics import torch_build_warning
+
+    warning = torch_build_warning()
+    if warning:
+        print(f"[alebrijes] warning: {warning}")
+
     host = "127.0.0.1"
     token = generate_token()
     port = find_free_port(host)

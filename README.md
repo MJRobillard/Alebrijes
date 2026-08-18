@@ -12,25 +12,41 @@ assemble**. See `PHASES.md` for the rollout plan and verification checklist.
 
 ## Status
 
-`synth` and `assemble` are ported from pocket-tts-agent and working. `segment`
-(dialogue/narration splitting) and `attribute` (`RuleBasedAttributor` — spaCy
-dependency parse + fiction-specific fallback heuristics, no cloud calls) are
-implemented and tested. `ingest` and `cast` are still stubbed interfaces — see
-`PHASES.md` for what's next.
+The full pipeline (ingest/segment/attribute/cast/synth/assemble) works for
+`.epub`/`.pdf`/`.txt` via the `alebrijes` CLI, and a desktop GUI
+(`alebrijes gui`) built on pywebview + a local FastAPI backend is up and
+verified end to end on Windows. See `PHASES.md` for the rollout plan, what's
+done, and what's next.
 
 ## Project layout
 
-- `src/alebrijes/` — the pipeline, one module per stage
+- `src/alebrijes/` — the pipeline, one module per stage, plus `server.py` /
+  `gui.py` / `frontend/` for the desktop app
 - `tests/` — unit tests, no model downloads required except spaCy's English
   model for `attribute` (see below)
 - `PHASES.md` — the rebuild roadmap and per-phase verification
 
 ## Install
 
+**Install the CPU-only torch build first, then everything else** — this
+matters: `pip install -e ".[dev]"` alone pulls torch from the default PyPI
+index with no preference for CPU vs. CUDA, and on a machine with a
+CUDA-capable Python/OS combination but no actual NVIDIA GPU, that resolves to
+a CUDA build carrying real, needless size and load-time overhead (confirmed
+on a real Windows test machine: `torch==2.6.0+cu118` installed with
+`torch.cuda.is_available()` False). Installing the CPU wheel explicitly
+first avoids this — pip won't touch an already-satisfied dependency on the
+next step.
+
 ```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -e ".[dev]"
 python -m spacy download en_core_web_sm  # required for alebrijes.attribute
 ```
+
+If you skip this and end up with a CUDA build anyway, `alebrijes gui` and
+`/api/health` both surface a warning about it (`alebrijes/diagnostics.py`) —
+not silent, just not prevented by default.
 
 ## Testing
 

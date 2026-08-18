@@ -161,19 +161,29 @@ application logic) → build cast → **review/edit each character's voice
 inline, save** (new `PUT /api/cast`) → render with live chapter-progress
 polling. `alebrijes gui` / `alebrijes-gui` both launch it.
 
-**Not yet verified**: actual pywebview window rendering on a real Mac or
-Windows machine — this sandbox is Linux without PyGObject installed for the
-GTK backend, and Linux isn't a shipping target anyway, so this genuinely
-needs a manual check on real hardware before Phase 3 is considered done.
-Everything that *could* be verified here for real was: the server on an
-actual socket, the index route's behavior and token-leak safety, and the
-frontend JS's syntax.
+**Verified on real hardware**: `alebrijes gui` run for real on Windows —
+window launched, pywebview's file dialog worked (after fixing a deprecated
+API call caught by this run — `OPEN_DIALOG` → `FileDialog.OPEN`), and a
+render triggered pocket-tts's first-run model download correctly. This
+sandbox couldn't do this itself (Linux without PyGObject for the GTK
+backend, and Linux isn't a shipping target anyway) — real-hardware
+verification from the user closed that gap.
 
-Remaining work beyond that real-machine check: the render-progress bar is
-chapter-granularity only (matches the backend's current resolution); no
-inline playback of low-confidence lines yet (the review list shows text +
-confidence, not audio preview) — both documented as known v1 gaps, not
-oversights.
+That same run surfaced a real Phase 4 gap: a plain `pip install -e ".[dev]"`
+pulled `torch==2.6.0+cu118` with `torch.cuda.is_available()` False — the
+CUDA-build-with-no-GPU scenario the Phase 4 sizing assumed wouldn't happen.
+Fixed two ways: install docs now say to install the CPU wheel explicitly
+first (README), and `alebrijes/diagnostics.py` surfaces a clear warning
+(`alebrijes gui`'s startup print, and `/api/health`'s `warnings` field,
+shown as a banner in the frontend) when it happens anyway, rather than
+silently eating the extra size/load time. The Phase 4 CI build pipeline
+below must enforce the CPU wheel too, not just document it — a signed
+installer built without that step ships the same oversized/slower artifact.
+
+Remaining work: the render-progress bar is chapter-granularity only
+(matches the backend's current resolution); no inline playback of
+low-confidence lines yet (the review list shows text + confidence, not audio
+preview) — both documented as known v1 gaps, not oversights.
 
 **Verification:** manual walkthrough — open a book, review/adjust cast,
 render (watching live progress over the local API) — with no script editing
@@ -197,6 +207,15 @@ sizing this out concretely:
   differentiator is "local and private," a single "it just works, no
   internet needed after install" download beats a smaller installer that
   needs a progress bar and network access before first use.
+- **The build venv must install CPU-only torch explicitly** — confirmed for
+  real (Windows test, Phase 3 verification): a plain `pip install` in a
+  fresh venv resolved a CUDA build (`torch==2.6.0+cu118`) with no GPU to use
+  it, not the CPU wheel the sizing above assumes. The CI step must be
+  `pip install torch --index-url https://download.pytorch.org/whl/cpu`
+  *before* installing the rest of the app, on both the macOS and Windows
+  runners — this is a build-pipeline requirement, not just an install-docs
+  note (see README), since a signed installer built without it ships the
+  same oversized/slower artifact to every user, silently.
 - **macOS: notarization is mandatory**, not optional — Gatekeeper blocks or
   scares off unsigned apps on current macOS. Needs an Apple Developer ID
   ($99/year) and, specific to PyInstaller, one extra entitlement

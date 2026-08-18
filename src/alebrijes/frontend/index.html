@@ -88,12 +88,23 @@
   .status { font-size: 0.88rem; color: var(--ink-soft); }
   .status.error { color: var(--danger); }
   .status.done { color: var(--accent); }
+  #warning-banner {
+    background: var(--amber-bg, #f3e3c9);
+    border: 1px solid var(--danger);
+    color: var(--ink);
+    border-radius: 6px;
+    padding: 0.7rem 0.9rem;
+    font-size: 0.85rem;
+    margin-bottom: 1.25rem;
+  }
 </style>
 </head>
 <body>
 <main>
   <h1>Alebrijes</h1>
   <p class="subtitle">Local, multi-voice book-to-audiobook.</p>
+
+  <div id="warning-banner" hidden></div>
 
   <section id="book-section">
     <h2>1. Choose a book</h2>
@@ -149,6 +160,14 @@
     if (window.pywebview && window.pywebview.api) return callback();
     window.addEventListener("pywebviewready", callback, { once: true });
   }
+
+  const warningBanner = document.getElementById("warning-banner");
+  apiFetch("/api/health").then(function (result) {
+    if (result.warnings && result.warnings.length) {
+      warningBanner.textContent = result.warnings.join(" ");
+      warningBanner.hidden = false;
+    }
+  }).catch(function () { /* health check failing is surfaced by every other call anyway */ });
 
   const bookPathEl = document.getElementById("book-path");
   const castSection = document.getElementById("cast-section");
