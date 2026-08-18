@@ -11,11 +11,15 @@
 # - CPU-only torch installed (see README) -- this spec doesn't control
 #   which torch build gets bundled, only what's already importable in the
 #   build venv.
-# - The HF weights cache populated at packaging/build/hf_cache/ (see
-#   PHASES.md's build-pipeline step 1 -- CI authenticates with a
-#   project-owned token and downloads kyutai/pocket-tts there before this
-#   spec runs). Bundled at runtime path hf_cache/, matching what
-#   alebrijes/hf_bundle.py looks for.
+# - The HF weights cache populated at packaging/build/hf_cache/ with
+#   kyutai/pocket-tts-without-voice-cloining (see PHASES.md's build-pipeline
+#   step 1) -- the *ungated* model. The packaged app never does audio-based
+#   voice cloning itself (see the "Import a voice" GUI section and its
+#   commit), only synthesis from already-computed .pt voice states, which
+#   the ungated model handles identically (verified: a state produced by
+#   the gated model decodes correctly on the ungated one). No HF account,
+#   login, or CI secret needed to fetch it -- it isn't gated. Bundled at
+#   runtime path hf_cache/, matching what alebrijes/hf_bundle.py looks for.
 # - spacy's en_core_web_sm model installed (`python -m spacy download
 #   en_core_web_sm`) so its package data can be collected.
 #
@@ -49,8 +53,9 @@ if HF_CACHE_DIR.exists():
 else:
     print(
         f"WARNING: {HF_CACHE_DIR} not found -- building without bundled pocket-tts "
-        "weights. The packaged app will need network + an HF login at runtime, "
-        "defeating the point. See PHASES.md Phase 4 build-pipeline step 1."
+        "weights. The packaged app will need network at runtime, defeating the "
+        "point (though not an HF login -- the ungated model needs no auth). "
+        "See PHASES.md Phase 4 build-pipeline step 1."
     )
 
 hiddenimports: list[str] = []

@@ -274,19 +274,28 @@ launch (a multi-second delay each time), where `--onedir` unpacks once at
 install time. Built separately on `macos-latest` and `windows-latest` GitHub
 Actions runners — a Mac app can't be cross-built from Windows or vice versa.
 
-1. **Fetch pocket-tts's weights using a project-owned Hugging Face token**,
-   stored as a GitHub Actions secret — `kyutai/pocket-tts` is a gated HF
-   repo (confirmed: the gate is just a "share contact info" click-through,
-   not a license restriction; the actual content license is CC-BY-4.0,
-   which permits redistribution with attribution). A real end user of the
-   packaged app should never see this gate or need an HF account — the
-   project accepts it once, and CI authenticates
-   (`huggingface-cli login --token $HF_TOKEN`) and downloads the weights
-   into the build venv before packaging, the same way a source install does
-   manually today (see README). Not committed to git (Phase 0's no-binaries
-   rule) — fetched fresh on every CI build, same treatment as CPU-torch.
-   Ship a Kyutai attribution notice in the app (an "About" screen or
-   equivalent) per CC-BY-4.0's terms.
+1. **Fetch pocket-tts's *ungated* weights** (`kyutai/pocket-tts-without-
+   voice-cloining`), no auth/token/CI secret needed at all — revised from
+   an earlier plan to bundle the gated, cloning-capable model via a
+   project-owned HF token. Verified empirically before making this call: a
+   voice-state produced by the gated model's cloning step decodes correctly
+   through the ungated model (real audio out, no crash, no NaNs, same
+   architecture/state_dict shape). Since the packaged app never does
+   audio-based cloning itself anyway (see below), it only ever needs the
+   ungated model for synthesis — dropping the gate entirely, not just
+   hiding it from the end user. Weights not committed to git (Phase 0's
+   no-binaries rule) — fetched fresh on every CI build, same treatment as
+   CPU-torch. Ship a Kyutai attribution notice in the app (done — see the
+   frontend footer and `CREDITS.md`) per CC-BY-4.0's terms.
+
+   **Voice cloning stays CLI/source-install-only.** The GUI's "Import a
+   voice" screen accepts an already-computed `.pt` voice-state file, not an
+   audio clip — importing is just a validated file copy
+   (`alebrijes/server.py`'s `_default_import_voice`), no model inference,
+   no HF access needed by the packaged app at all. Producing a `.pt` from
+   audio still requires the gated model (`alebrijes voices add` on a
+   source install, with the one-time HF login from the README) — that
+   capability isn't removed, just no longer a packaging requirement.
 2. `pyinstaller` (onedir) bundles the FastAPI backend + pywebview shell +
    torch/spacy/pocket-tts weights into a platform-specific app folder.
    ffmpeg no longer needs its own fetch-and-verify CI step — it's bundled
