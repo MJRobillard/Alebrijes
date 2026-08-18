@@ -41,7 +41,7 @@ from pydantic import BaseModel
 
 from alebrijes.cast import CastEntry, CastFile, load as load_cast, save as save_cast
 from alebrijes.cast.build import LOW_CONFIDENCE_THRESHOLD, build_cast_file
-from alebrijes.config import AUDIO_EXTENSIONS, BUILTIN_VOICES, Config
+from alebrijes.config import BUILTIN_VOICES, Config
 from alebrijes.ingest import Book
 from alebrijes.preview import synthesize_preview as default_synthesize_preview
 from alebrijes.render import render_book as default_render_book
@@ -98,11 +98,9 @@ class VoicesResponse(BaseModel):
     cloned: list[ClonedVoice]
 
 
-class AddVoiceRequest(BaseModel):
-    source: str
+class ImportVoiceRequest(BaseModel):
+    source: str  # path to an existing voice-state .pt file
     name: str
-    start: Optional[float] = None
-    end: Optional[float] = None
 
 
 class PreviewRequest(BaseModel):
@@ -144,22 +142,37 @@ class _RenderJob:
 IngestFn = Callable[[Path], Book]
 RenderFn = Callable[..., Path]
 SynthesizePreviewFn = Callable[[str, str], bytes]
-CloneVoiceFn = Callable[[Path, str, Optional[float], Optional[float], Path], Path]
+ImportVoiceFn = Callable[[Path, str, Path], Path]
 
 
-def _default_clone_voice(
-    source_path: Path, name: str, start: Optional[float], end: Optional[float], voices_dir: Path
-) -> Path:
-    # Mirrors alebrijes.cli._cmd_voices_add's body -- duplicated rather than
-    # imported from cli.py, same reasoning as _default_ingest_book above.
+def _load_voice_state_for_validation(source_path: Path) -> None:
     import torch
 
-    from alebrijes.synth.agent import create_voice_state
+    try:
+        torch.load(source_path, map_location="cpu", weights_only=False)
+    except TypeError:
+        torch.load(source_path, map_location="cpu")
+
+
+def _default_import_voice(source_path: Path, name: str, voices_dir: Path) -> Path:
+    # No cloning inference here -- the packaged app ships pocket-tts's
+    # ungated model (see PHASES.md), which can't do audio->voice-state
+    # cloning at all. Voice states come from elsewhere (e.g. `alebrijes
+    # voices add` on a source/dev install, which does have that
+    # capability, via a one-time HF login) and get imported here as
+    # already-computed .pt files -- validated, not blindly copied, so a
+    # wrong file fails clearly now instead of cryptically the next time
+    # this voice is used to render.
+    import shutil
+
+    try:
+        _load_voice_state_for_validation(source_path)
+    except Exception as exc:
+        raise ValueError(f"'{source_path}' doesn't look like a valid voice-state file: {exc}") from exc
 
     voices_dir.mkdir(parents=True, exist_ok=True)
     out_path = voices_dir / f"{name}.pt"
-    state = create_voice_state(source_path, clip_start=start, clip_end=end)
-    torch.save(state, out_path)
+    shutil.copy2(source_path, out_path)
     return out_path
 
 
@@ -186,7 +199,7 @@ def create_app(
     ingest_book: IngestFn = _default_ingest_book,
     render_fn: RenderFn = default_render_book,
     synthesize_preview_fn: SynthesizePreviewFn = default_synthesize_preview,
-    clone_voice_fn: CloneVoiceFn = _default_clone_voice,
+    import_voice_fn: ImportVoiceFn = _default_import_voice,
     voices_dir: Optional[Path] = None,
 ) -> FastAPI:
     if voices_dir is None:
@@ -218,24 +231,21 @@ def create_app(
         return VoicesResponse(builtin=list(BUILTIN_VOICES), cloned=cloned)
 
     @app.post("/api/voices", response_model=VoicesResponse, dependencies=[Depends(_verify_request)])
-    def add_voice(payload: AddVoiceRequest) -> VoicesResponse:
+    def add_voice(payload: ImportVoiceRequest) -> VoicesResponse:
         source_path = Path(payload.source)
         if not source_path.exists():
-            raise HTTPException(status_code=400, detail=f"Voice source file not found: {source_path}")
-        if source_path.suffix.lower() not in AUDIO_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"Voice file not found: {source_path}")
+        if source_path.suffix.lower() != ".pt":
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"'{source_path}' doesn't look like an audio file (expected one of: "
-                    f"{', '.join(sorted(AUDIO_EXTENSIONS))})."
-                ),
+                detail=f"'{source_path}' doesn't look like a voice-state file (expected .pt).",
             )
         name = payload.name.strip()
         if not name:
             raise HTTPException(status_code=400, detail="Voice name is required.")
 
         try:
-            clone_voice_fn(source_path, name, payload.start, payload.end, voices_dir)
+            import_voice_fn(source_path, name, voices_dir)
         except Exception as exc:  # noqa: BLE001 - reported to the client, not swallowed
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

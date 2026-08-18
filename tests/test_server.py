@@ -128,56 +128,56 @@ def test_voices_endpoint_requires_token(tmp_path: Path) -> None:
     assert response.status_code == 403
 
 
-def test_add_voice_clones_and_returns_updated_voice_list(tmp_path: Path) -> None:
-    source = tmp_path / "clip.wav"
-    source.write_bytes(b"fake audio")
+def test_add_voice_imports_and_returns_updated_voice_list(tmp_path: Path) -> None:
+    source = tmp_path / "narrator.pt"
+    source.write_bytes(b"fake voice state")
     voices_dir = tmp_path / "voices"
 
     calls = []
 
-    def fake_clone(source_path: Path, name: str, start, end, voices_dir_arg: Path) -> Path:
-        calls.append((source_path, name, start, end, voices_dir_arg))
+    def fake_import(source_path: Path, name: str, voices_dir_arg: Path) -> Path:
+        calls.append((source_path, name, voices_dir_arg))
         voices_dir_arg.mkdir(parents=True, exist_ok=True)
         out = voices_dir_arg / f"{name}.pt"
         out.write_bytes(b"fake-state")
         return out
 
-    client = _client(voices_dir=voices_dir, clone_voice_fn=fake_clone)
+    client = _client(voices_dir=voices_dir, import_voice_fn=fake_import)
     response = client.post(
         "/api/voices",
         headers=_headers(),
-        json={"source": str(source), "name": "narrator_clone", "start": 1.0, "end": 6.0},
+        json={"source": str(source), "name": "narrator_import"},
     )
 
     assert response.status_code == 200
     body = response.json()
     names = {c["name"] for c in body["cloned"]}
-    assert "narrator_clone" in names
-    assert calls == [(source, "narrator_clone", 1.0, 6.0, voices_dir)]
+    assert "narrator_import" in names
+    assert calls == [(source, "narrator_import", voices_dir)]
 
 
 def test_add_voice_rejects_missing_source_file(tmp_path: Path) -> None:
     client = _client(voices_dir=tmp_path)
     response = client.post(
-        "/api/voices", headers=_headers(), json={"source": str(tmp_path / "missing.wav"), "name": "test"}
+        "/api/voices", headers=_headers(), json={"source": str(tmp_path / "missing.pt"), "name": "test"}
     )
     assert response.status_code == 400
 
 
-def test_add_voice_rejects_non_audio_extension(tmp_path: Path) -> None:
-    source = tmp_path / "clip.mp4"
-    source.write_bytes(b"not audio")
+def test_add_voice_rejects_non_pt_extension(tmp_path: Path) -> None:
+    source = tmp_path / "clip.wav"
+    source.write_bytes(b"not a voice state")
 
     client = _client(voices_dir=tmp_path)
     response = client.post("/api/voices", headers=_headers(), json={"source": str(source), "name": "test"})
 
     assert response.status_code == 400
-    assert "audio file" in response.json()["detail"]
+    assert "voice-state file" in response.json()["detail"]
 
 
 def test_add_voice_rejects_blank_name(tmp_path: Path) -> None:
-    source = tmp_path / "clip.wav"
-    source.write_bytes(b"fake audio")
+    source = tmp_path / "narrator.pt"
+    source.write_bytes(b"fake voice state")
 
     client = _client(voices_dir=tmp_path)
     response = client.post("/api/voices", headers=_headers(), json={"source": str(source), "name": "   "})
@@ -186,18 +186,48 @@ def test_add_voice_rejects_blank_name(tmp_path: Path) -> None:
     assert "name is required" in response.json()["detail"]
 
 
-def test_add_voice_reports_clone_errors_clearly(tmp_path: Path) -> None:
-    source = tmp_path / "clip.wav"
-    source.write_bytes(b"fake audio")
+def test_add_voice_reports_import_errors_clearly(tmp_path: Path) -> None:
+    source = tmp_path / "narrator.pt"
+    source.write_bytes(b"fake voice state")
 
-    def failing_clone(*args, **kwargs) -> Path:
-        raise RuntimeError("model exploded")
+    def failing_import(*args, **kwargs) -> Path:
+        raise RuntimeError("not a valid torch file")
 
-    client = _client(voices_dir=tmp_path, clone_voice_fn=failing_clone)
+    client = _client(voices_dir=tmp_path, import_voice_fn=failing_import)
     response = client.post("/api/voices", headers=_headers(), json={"source": str(source), "name": "test"})
 
     assert response.status_code == 400
-    assert "model exploded" in response.json()["detail"]
+    assert "not a valid torch file" in response.json()["detail"]
+
+
+def test_default_import_voice_rejects_a_file_that_isnt_a_real_torch_state(tmp_path: Path) -> None:
+    # Uses the real (non-injected) default import function, not a fake --
+    # proves the validation actually works, not just that the route wires
+    # errors through correctly.
+    source = tmp_path / "fake.pt"
+    source.write_bytes(b"this is not a torch state file")
+
+    client = _client(voices_dir=tmp_path / "voices")  # default import_voice_fn
+    response = client.post("/api/voices", headers=_headers(), json={"source": str(source), "name": "test"})
+
+    assert response.status_code == 400
+    assert "doesn't look like a valid voice-state file" in response.json()["detail"]
+
+
+def test_default_import_voice_accepts_a_real_torch_state(tmp_path: Path) -> None:
+    import torch
+
+    source = tmp_path / "real.pt"
+    torch.save({"conditioning": "alba"}, source)
+    voices_dir = tmp_path / "voices"
+
+    client = _client(voices_dir=voices_dir)  # default import_voice_fn
+    response = client.post("/api/voices", headers=_headers(), json={"source": str(source), "name": "narrator"})
+
+    assert response.status_code == 200
+    imported = voices_dir / "narrator.pt"
+    assert imported.exists()
+    assert torch.load(imported, weights_only=False) == {"conditioning": "alba"}
 
 
 # --- /api/preview ----------------------------------------------------------

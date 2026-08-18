@@ -28,6 +28,9 @@ dev = [
   "reportlab",  # generates tiny real PDFs for ingest.pdf tests only
   "httpx",  # required by fastapi.testclient.TestClient
 ]
+build = [
+  "pyinstaller",  # only needed to produce the packaged desktop app (Phase 4)
+]
 
 [project.scripts]
 alebrijes = "alebrijes.cli:main"

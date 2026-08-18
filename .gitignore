@@ -8,6 +8,10 @@ dist/
 .venv/
 venv/
 
+# PyInstaller build output and staged HF cache (packaging/alebrijes.spec) --
+# real build artifacts, up to several GB, never committed (Phase 0 rule)
+packaging/work/
+
 # Test / tooling
 .pytest_cache/
 .mypy_cache/
