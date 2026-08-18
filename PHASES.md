@@ -274,7 +274,20 @@ launch (a multi-second delay each time), where `--onedir` unpacks once at
 install time. Built separately on `macos-latest` and `windows-latest` GitHub
 Actions runners — a Mac app can't be cross-built from Windows or vice versa.
 
-1. `pyinstaller` (onedir) bundles the FastAPI backend + pywebview shell +
+1. **Fetch pocket-tts's weights using a project-owned Hugging Face token**,
+   stored as a GitHub Actions secret — `kyutai/pocket-tts` is a gated HF
+   repo (confirmed: the gate is just a "share contact info" click-through,
+   not a license restriction; the actual content license is CC-BY-4.0,
+   which permits redistribution with attribution). A real end user of the
+   packaged app should never see this gate or need an HF account — the
+   project accepts it once, and CI authenticates
+   (`huggingface-cli login --token $HF_TOKEN`) and downloads the weights
+   into the build venv before packaging, the same way a source install does
+   manually today (see README). Not committed to git (Phase 0's no-binaries
+   rule) — fetched fresh on every CI build, same treatment as CPU-torch.
+   Ship a Kyutai attribution notice in the app (an "About" screen or
+   equivalent) per CC-BY-4.0's terms.
+2. `pyinstaller` (onedir) bundles the FastAPI backend + pywebview shell +
    torch/spacy/pocket-tts weights into a platform-specific app folder.
    ffmpeg no longer needs its own fetch-and-verify CI step — it's bundled
    automatically as a real static binary via the `imageio-ffmpeg` pip
@@ -282,15 +295,15 @@ Actions runners — a Mac app can't be cross-built from Windows or vice versa.
    target platforms), the same mechanism a source install already uses.
    `pyinstaller` needs `--collect-data imageio_ffmpeg` to pick up the
    package's bundled binary.
-2. **macOS**: `codesign` the `.app` with the Developer ID cert → `xcrun
+3. **macOS**: `codesign` the `.app` with the Developer ID cert → `xcrun
    notarytool submit` → `xcrun stapler staple` (ticket must be stapled, not
    just submitted, so the app still passes Gatekeeper offline) → wrap in a
    `.dmg` via `create-dmg` for the drag-to-Applications experience.
-3. **Windows**: `signtool sign` the `.exe` → build the installer with Inno
+4. **Windows**: `signtool sign` the `.exe` → build the installer with Inno
    Setup (a single `.iss` script) — produces the Start Menu shortcut and the
    "Add or Remove Programs" uninstaller entry, which a bare exe/zip doesn't
    give you.
-4. A signed-but-unwrapped zip of the same `.app`/`.exe` folder is also worth
+5. A signed-but-unwrapped zip of the same `.app`/`.exe` folder is also worth
    publishing as a secondary "portable" download (no install footprint, no
    admin rights needed, e.g. for running off a USB drive) — it costs nothing
    extra since it's the same signed artifact, just zipped instead of
@@ -298,7 +311,7 @@ Actions runners — a Mac app can't be cross-built from Windows or vice versa.
    drag-in experience, no Start Menu entry, no uninstaller. Zipping never
    substitutes for signing — Gatekeeper and SmartScreen both check the
    binary's signature at launch regardless of how it was delivered.
-5. Both installers (plus the optional portable zips) attached to a GitHub
+6. Both installers (plus the optional portable zips) attached to a GitHub
    Release; the README/landing page links directly to "Download for Mac" /
    "Download for Windows" pointing at those release assets.
 

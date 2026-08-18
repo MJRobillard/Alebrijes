@@ -71,6 +71,28 @@ step, and this is also how Phase 4's packaged installer will get it — same
 mechanism for a source install and the shipped app, not two different
 answers to "where does ffmpeg come from."
 
+**pocket-tts's model is a gated Hugging Face repo** — the first time
+anything actually synthesizes audio (`alebrijes cast`/`render`/`voices add`,
+or the GUI), pocket-tts downloads its weights from
+`huggingface.co/kyutai/pocket-tts`, and that repo requires agreeing to share
+contact info before downloading (its actual content license is CC-BY-4.0 —
+permissive, not the restriction; the gate is just a Hugging Face
+click-through). For a source install, each developer/tester needs to do
+this once:
+
+1. Create a free account at huggingface.co (if you don't have one).
+2. Visit `https://huggingface.co/kyutai/pocket-tts` and click "Agree and
+   access repository."
+3. Authenticate locally so downloads are authorized:
+   ```bash
+   pip install huggingface_hub
+   huggingface-cli login   # paste an access token from huggingface.co/settings/tokens
+   ```
+
+This is a source-install-only step — Phase 4's packaged installer bundles
+the weights directly (acquired once, at build time, via a project-owned
+token, not something each end user has to do — see `PHASES.md`).
+
 ## Testing
 
 ```bash
