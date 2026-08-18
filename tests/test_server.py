@@ -302,8 +302,37 @@ def test_render_endpoint_starts_job_and_reports_progress_to_completion(tmp_path:
     assert status["status"] == "done"
     assert status["chapters_done"] == 2
     assert status["chapters_total"] == 2
+    assert status["chapter_titles"] == ["One", "Two"]
+    assert status["elapsed_seconds"] > 0
     assert status["output_path"] == str(out_path)
     assert out_path.read_bytes() == b"fake-m4b"
+
+
+def test_render_endpoint_elapsed_time_freezes_after_completion(tmp_path: Path) -> None:
+    cast_file = CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")])
+    cast_path = tmp_path / "cast.yaml"
+    save_cast(cast_file, cast_path)
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"unused")
+
+    client = _client(ingest_book=lambda path: _fixture_book(), render_fn=_fake_render_book)
+    start = client.post(
+        "/api/render", headers=_headers(), json={"book": str(book_path), "cast": str(cast_path)}
+    )
+    job_id = start.json()["job_id"]
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        status = client.get(f"/api/render/{job_id}", headers=_headers()).json()
+        if status["status"] != "running":
+            break
+        time.sleep(0.02)
+
+    first_elapsed = client.get(f"/api/render/{job_id}", headers=_headers()).json()["elapsed_seconds"]
+    time.sleep(0.05)
+    second_elapsed = client.get(f"/api/render/{job_id}", headers=_headers()).json()["elapsed_seconds"]
+
+    assert first_elapsed == second_elapsed
 
 
 def test_render_endpoint_reports_error_status_on_failure(tmp_path: Path) -> None:

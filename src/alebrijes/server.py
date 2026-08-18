@@ -29,6 +29,7 @@ from __future__ import annotations
 import secrets
 import socket
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -114,6 +115,8 @@ class RenderJobStatus(BaseModel):
     status: str  # "running" | "done" | "error"
     chapters_done: int = 0
     chapters_total: int = 0
+    chapter_titles: list[str] = []
+    elapsed_seconds: float = 0.0
     output_path: Optional[str] = None
     error: Optional[str] = None
 
@@ -123,6 +126,9 @@ class _RenderJob:
     status: str = "running"
     chapters_done: int = 0
     chapters_total: int = 0
+    chapter_titles: list[str] = field(default_factory=list)
+    started_at: float = field(default_factory=time.time)
+    finished_at: Optional[float] = None
     output_path: Optional[str] = None
     error: Optional[str] = None
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -261,16 +267,19 @@ def create_app(
             book = ingest_book(book_path)
             with job.lock:
                 job.chapters_total = len(book.chapters)
+                job.chapter_titles = [c.title or f"Chapter {c.index + 1}" for c in book.chapters]
             result_path = render_fn(
                 book, cast_file, out_path, pause_ms=pause_ms, on_chapter_done=_on_chapter_done
             )
             with job.lock:
                 job.status = "done"
                 job.output_path = str(result_path)
+                job.finished_at = time.time()
         except Exception as exc:  # noqa: BLE001 - reported to the client, not swallowed
             with job.lock:
                 job.status = "error"
                 job.error = str(exc)
+                job.finished_at = time.time()
 
     @app.post("/api/render", response_model=RenderJobStatus, dependencies=[Depends(_verify_request)])
     def render(payload: RenderRequest) -> RenderJobStatus:
@@ -299,11 +308,14 @@ def create_app(
         if job is None:
             raise HTTPException(status_code=404, detail="Unknown job id")
         with job.lock:
+            elapsed = (job.finished_at or time.time()) - job.started_at
             return RenderJobStatus(
                 job_id=job_id,
                 status=job.status,
                 chapters_done=job.chapters_done,
                 chapters_total=job.chapters_total,
+                chapter_titles=list(job.chapter_titles),
+                elapsed_seconds=elapsed,
                 output_path=job.output_path,
                 error=job.error,
             )

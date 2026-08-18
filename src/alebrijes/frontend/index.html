@@ -88,6 +88,14 @@
   .status { font-size: 0.88rem; color: var(--ink-soft); }
   .status.error { color: var(--danger); }
   .status.done { color: var(--accent); }
+  #chapter-progress-list { list-style: none; padding: 0; margin: 0.75rem 0 0; }
+  #chapter-progress-list li {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.3rem 0; font-size: 0.88rem; color: var(--ink-soft);
+  }
+  #chapter-progress-list li.done { color: var(--ink); }
+  #chapter-progress-list li.current { color: var(--accent); font-weight: 600; }
+  #chapter-progress-list .mark { width: 1.1rem; text-align: center; font-family: ui-monospace, monospace; }
   #warning-banner {
     background: var(--amber-bg, #f3e3c9);
     border: 1px solid var(--danger);
@@ -138,6 +146,7 @@
     </div>
     <div class="progress-bar" id="progress-bar" hidden><div id="progress-fill" style="width: 0%"></div></div>
     <div id="render-status" class="status"></div>
+    <ol id="chapter-progress-list" hidden></ol>
   </section>
 </main>
 
@@ -358,6 +367,40 @@
   const renderStatusEl = document.getElementById("render-status");
   const progressBar = document.getElementById("progress-bar");
   const progressFill = document.getElementById("progress-fill");
+  const chapterListEl = document.getElementById("chapter-progress-list");
+
+  function formatElapsed(seconds) {
+    const total = Math.round(seconds);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return m > 0 ? m + "m " + s + "s" : s + "s";
+  }
+
+  function renderChapterList(chapterTitles, chaptersDone) {
+    if (!chapterTitles.length) {
+      chapterListEl.hidden = true;
+      return;
+    }
+    chapterListEl.hidden = false;
+    chapterListEl.innerHTML = "";
+    chapterTitles.forEach(function (title, index) {
+      const li = document.createElement("li");
+      const mark = document.createElement("span");
+      mark.className = "mark";
+      if (index < chaptersDone) {
+        li.className = "done";
+        mark.textContent = "✓";
+      } else if (index === chaptersDone) {
+        li.className = "current";
+        mark.textContent = "…";
+      } else {
+        mark.textContent = "";
+      }
+      li.appendChild(mark);
+      li.appendChild(document.createTextNode(title));
+      chapterListEl.appendChild(li);
+    });
+  }
 
   function pollRenderJob(jobId) {
     apiFetch("/api/render/" + jobId).then(function (status) {
@@ -366,23 +409,28 @@
         const pct = Math.round((status.chapters_done / status.chapters_total) * 100);
         progressFill.style.width = pct + "%";
       }
+      renderChapterList(status.chapter_titles, status.chapters_done);
+
+      const elapsed = formatElapsed(status.elapsed_seconds);
       if (status.status === "running") {
         renderStatusEl.className = "status";
         renderStatusEl.textContent =
-          "Rendering… (" + status.chapters_done + "/" + status.chapters_total + " chapters)";
+          "Rendering… (" + status.chapters_done + "/" + status.chapters_total + " chapters, " + elapsed + " elapsed)";
         setTimeout(function () { pollRenderJob(jobId); }, 500);
       } else if (status.status === "done") {
         renderStatusEl.className = "status done";
-        renderStatusEl.textContent = "Done. Saved to " + status.output_path;
+        renderStatusEl.textContent = "Done in " + elapsed + ". Saved to " + status.output_path;
       } else {
         renderStatusEl.className = "status error";
-        renderStatusEl.textContent = "Error: " + status.error;
+        renderStatusEl.textContent = "Error after " + elapsed + ": " + status.error;
       }
     });
   }
 
   document.getElementById("render-btn").addEventListener("click", function () {
     progressFill.style.width = "0%";
+    chapterListEl.hidden = true;
+    chapterListEl.innerHTML = "";
     renderStatusEl.className = "status";
     renderStatusEl.textContent = "Starting render…";
     apiFetch("/api/render", { method: "POST", body: JSON.stringify({ book: state.bookPath, cast: state.castPath }) })
