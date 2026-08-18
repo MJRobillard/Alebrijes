@@ -6,11 +6,14 @@ what proves the port (import-path updates only) didn't change behavior.
 
 from __future__ import annotations
 
+import wave
+from io import BytesIO
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-from alebrijes.synth.agent import TTSAgent, _resolve_voice_prompt, _voice_cache_key, create_voice_state
+from alebrijes.synth.agent import TTSAgent, _resolve_voice_prompt, _voice_cache_key, create_voice_state, write_wav_array
 
 
 def test_resolve_voice_prompt_returns_existing_local_file(tmp_path: Path) -> None:
@@ -127,3 +130,17 @@ def test_agent_init_uses_provided_voice_state_without_recomputing() -> None:
     assert agent._voice_cache is not None
     assert agent._voice_cache.state is supplied_state
     assert calls == []
+
+
+def test_write_wav_array_accepts_a_file_like_object() -> None:
+    # Regression test: write_wav_array used to unconditionally str(path) its
+    # destination, which for a file-like object like BytesIO silently wrote
+    # to a garbage on-disk filename derived from the object's repr (e.g.
+    # "<_io.BytesIO object at 0x...>") instead of writing into the buffer or
+    # raising a clear error.
+    buffer = BytesIO()
+    write_wav_array(buffer, 24000, np.ones(10, dtype=np.int16))
+
+    with wave.open(BytesIO(buffer.getvalue()), "rb") as handle:
+        assert handle.getnframes() == 10
+        assert handle.getframerate() == 24000

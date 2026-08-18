@@ -128,6 +128,54 @@ def test_voices_endpoint_requires_token(tmp_path: Path) -> None:
     assert response.status_code == 403
 
 
+# --- /api/preview ----------------------------------------------------------
+
+
+def test_preview_endpoint_returns_audio_bytes_from_injected_synth_fn() -> None:
+    calls = []
+
+    def fake_synthesize(text: str, voice_state_path: str) -> bytes:
+        calls.append((text, voice_state_path))
+        return b"RIFF-fake-wav-bytes"
+
+    client = _client(synthesize_preview_fn=fake_synthesize)
+    response = client.post(
+        "/api/preview", headers=_headers(), json={"text": "Hello there.", "voice_state_path": "alba"}
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == b"RIFF-fake-wav-bytes"
+    assert calls == [("Hello there.", "alba")]
+
+
+def test_preview_endpoint_rejects_overly_long_text() -> None:
+    client = _client(synthesize_preview_fn=lambda text, voice: b"")
+    response = client.post(
+        "/api/preview", headers=_headers(), json={"text": "x" * 501, "voice_state_path": "alba"}
+    )
+    assert response.status_code == 400
+
+
+def test_preview_endpoint_reports_synthesis_errors_clearly() -> None:
+    def failing_synthesize(text: str, voice_state_path: str) -> bytes:
+        raise RuntimeError("no such voice")
+
+    client = _client(synthesize_preview_fn=failing_synthesize)
+    response = client.post(
+        "/api/preview", headers=_headers(), json={"text": "Hi.", "voice_state_path": "nonexistent"}
+    )
+
+    assert response.status_code == 400
+    assert "no such voice" in response.json()["detail"]
+
+
+def test_preview_endpoint_requires_token() -> None:
+    client = _client(synthesize_preview_fn=lambda text, voice: b"")
+    response = client.post("/api/preview", json={"text": "Hi.", "voice_state_path": "alba"})
+    assert response.status_code == 403
+
+
 # --- /api/cast -----------------------------------------------------------
 
 

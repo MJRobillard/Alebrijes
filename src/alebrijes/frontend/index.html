@@ -249,6 +249,44 @@
     saveCastRow.hidden = false;
   }
 
+  function currentVoiceForCharacter(character) {
+    const select = castRows.querySelector('select[data-character="' + CSS.escape(character) + '"]');
+    if (select) return select.value;
+    // "Unknown"-attributed lines have no cast row of their own -- preview
+    // them in the Narrator's voice, the same fallback render.py uses.
+    const narratorSelect = castRows.querySelector('select[data-character="Narrator"]');
+    return narratorSelect ? narratorSelect.value : null;
+  }
+
+  function playPreview(text, voiceStatePath, button) {
+    // Not apiFetch: that helper assumes a JSON response body, but this
+    // endpoint returns raw audio/wav bytes.
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = "…";
+    fetch("/api/preview", {
+      method: "POST",
+      headers: { "X-Alebrijes-Token": token, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text, voice_state_path: voiceStatePath }),
+    })
+      .then(function (response) {
+        if (!response.ok) return response.json().then(function (b) { throw new Error(b.detail || "Preview failed"); });
+        return response.blob();
+      })
+      .then(function (blob) {
+        const audio = new Audio(URL.createObjectURL(blob));
+        audio.play();
+      })
+      .catch(function (err) {
+        button.textContent = "Error";
+        console.error(err);
+      })
+      .finally(function () {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      });
+  }
+
   function renderReviewLines(lines) {
     if (!lines.length) {
       reviewLinesEl.innerHTML = "";
@@ -266,7 +304,19 @@
       confSpan.className = "conf";
       confSpan.textContent = "[" + line.confidence.toFixed(2) + "]";
       div.appendChild(confSpan);
-      div.appendChild(document.createTextNode(line.character + ": “" + line.text + "”"));
+      div.appendChild(document.createTextNode(line.character + ": “" + line.text + "” "));
+
+      const playBtn = document.createElement("button");
+      playBtn.className = "secondary";
+      playBtn.textContent = "▶ Preview";
+      playBtn.style.marginLeft = "0.4rem";
+      playBtn.addEventListener("click", function () {
+        const voiceStatePath = currentVoiceForCharacter(line.character);
+        if (!voiceStatePath) return;
+        playPreview(line.text, voiceStatePath, playBtn);
+      });
+      div.appendChild(playBtn);
+
       reviewLinesEl.appendChild(div);
     });
   }

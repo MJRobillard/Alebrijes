@@ -35,13 +35,14 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from alebrijes.cast import CastEntry, CastFile, load as load_cast, save as save_cast
 from alebrijes.cast.build import LOW_CONFIDENCE_THRESHOLD, build_cast_file
 from alebrijes.config import BUILTIN_VOICES, Config
 from alebrijes.ingest import Book
+from alebrijes.preview import synthesize_preview as default_synthesize_preview
 from alebrijes.render import render_book as default_render_book
 
 
@@ -96,6 +97,11 @@ class VoicesResponse(BaseModel):
     cloned: list[ClonedVoice]
 
 
+class PreviewRequest(BaseModel):
+    text: str
+    voice_state_path: str
+
+
 class RenderRequest(BaseModel):
     book: str
     cast: str
@@ -124,6 +130,7 @@ class _RenderJob:
 
 IngestFn = Callable[[Path], Book]
 RenderFn = Callable[..., Path]
+SynthesizePreviewFn = Callable[[str, str], bytes]
 
 
 def _default_ingest_book(book_path: Path) -> Book:
@@ -148,6 +155,7 @@ def create_app(
     allowed_origin: str = "http://127.0.0.1",
     ingest_book: IngestFn = _default_ingest_book,
     render_fn: RenderFn = default_render_book,
+    synthesize_preview_fn: SynthesizePreviewFn = default_synthesize_preview,
     voices_dir: Optional[Path] = None,
 ) -> FastAPI:
     if voices_dir is None:
@@ -177,6 +185,19 @@ def create_app(
             for pt_file in sorted(voices_dir.glob("*.pt")):
                 cloned.append(ClonedVoice(name=pt_file.stem, voice_state_path=str(pt_file)))
         return VoicesResponse(builtin=list(BUILTIN_VOICES), cloned=cloned)
+
+    @app.post("/api/preview", dependencies=[Depends(_verify_request)])
+    def preview(payload: PreviewRequest) -> Response:
+        # Bounded to a single line/short passage, not an arbitrary text
+        # blob — this endpoint exists for "does this voice sound right for
+        # this character", not batch synthesis (that's /api/render).
+        if len(payload.text) > 500:
+            raise HTTPException(status_code=400, detail="Preview text must be 500 characters or fewer.")
+        try:
+            audio_bytes = synthesize_preview_fn(payload.text, payload.voice_state_path)
+        except Exception as exc:  # noqa: BLE001 - reported to the client, not swallowed
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return Response(content=audio_bytes, media_type="audio/wav")
 
     @app.post("/api/cast", response_model=CastResponse, dependencies=[Depends(_verify_request)])
     def cast(payload: CastRequest) -> CastResponse:

@@ -17,8 +17,14 @@ VoicePrompt = Union[str, Path]
 _DEFAULT_VOICE_CACHE_DIR = Path(tempfile.gettempdir()) / "pocket_tts_agent" / "voice_prompts"
 
 
-def write_wav_array(path: Union[str, Path], sample_rate: int, audio: np.ndarray) -> None:
+def write_wav_array(path: Union[str, Path, object], sample_rate: int, audio: np.ndarray) -> None:
     """Writes a raw audio array (float or int16) to a 16-bit PCM WAV file.
+
+    `path` accepts a str/Path destination or an open binary file-like object
+    (e.g. `io.BytesIO`, for in-memory previews that never touch disk) — only
+    str/Path go through `str(path)`; a file-like object is passed to scipy
+    as-is, since stringifying it would silently write to a garbage filename
+    derived from its repr instead of raising a clear error.
 
     Public so callers assembling audio from multiple synthesize() calls (e.g.
     a multi-voice chapter render) can write it out without reaching into
@@ -35,7 +41,8 @@ def write_wav_array(path: Union[str, Path], sample_rate: int, audio: np.ndarray)
     elif pcm_audio.dtype != np.int16:
         pcm_audio = pcm_audio.astype(np.int16)
 
-    _wavfile.write(str(path), sample_rate, pcm_audio)
+    destination = str(path) if isinstance(path, (str, Path)) else path
+    _wavfile.write(destination, sample_rate, pcm_audio)
 
 
 _write_wav = write_wav_array
