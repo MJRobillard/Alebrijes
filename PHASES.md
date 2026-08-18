@@ -191,13 +191,26 @@ destination, so a `BytesIO` (needed here for in-memory audio, no disk
 round-trip) silently wrote to a garbage on-disk filename derived from the
 object's repr instead of into the buffer — now fixed with a regression test.
 
-Remaining work: the render-progress bar is chapter-granularity only (matches
-the backend's current resolution) — a documented v1 gap, not an oversight;
-and full end-to-end verification is still pending your confirmation that a
-real render actually completes with a playable `.m4b` on the Windows machine
-(the CUDA/venv issues were fixed but that final check hasn't come back yet),
-plus the equivalent real-hardware check on macOS, which hasn't happened at
-all yet.
+**Full end-to-end render confirmed working on Windows**: open a book, build
+and review cast, render, playable `.m4b` produced — the real-hardware check
+this phase was waiting on. Along the way, real hardware surfaced and got
+fixed: the pywebview `OPEN_DIALOG` deprecation, a CUDA-build-with-no-GPU
+torch install (root-caused to a shared global Python environment — fixed
+with venv guidance + a runtime warning), `render_book` wasting an entire
+render's work by only checking for ffmpeg at the very last step, and
+ultimately ffmpeg itself moved from "must be on system PATH" to bundled
+automatically via `imageio-ffmpeg`. None of these were caught by the test
+suite or this sandbox — they only surfaced by actually running the app on
+real hardware, which is the whole reason this phase's verification couldn't
+be marked done from here alone.
+
+Remaining, not blocking: the render-progress bar is chapter-granularity only
+(matches the backend's current resolution) — a documented v1 gap, not an
+oversight; and the equivalent real-hardware check on macOS hasn't happened
+yet (not urgent — Windows was the harder platform to get right given
+WebView2/CUDA-torch/PATH quirks that don't really have macOS equivalents).
+
+**Phase 3: done.**
 
 **Verification:** manual walkthrough — open a book, review/adjust cast,
 render (watching live progress over the local API) — with no script editing
