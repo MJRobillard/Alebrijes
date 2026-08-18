@@ -100,10 +100,18 @@ def test_create_voice_state_uses_resolved_prompt(tmp_path: Path) -> None:
 
 
 def test_agent_init_uses_provided_voice_state_without_recomputing() -> None:
+    import torch
+
     calls: list[object] = []
 
     class FakeModel:
         sample_rate = 24000
+        # TTSAgent.__init__ primes a real model's stateful submodules via
+        # init_states(self._model.flow_lm, ...) whenever a voice_state is
+        # supplied directly (see synth/agent.py). init_states only needs
+        # flow_lm.named_modules(); a bare nn.Module satisfies that without
+        # pulling in the real (heavy) flow_lm.
+        flow_lm = torch.nn.Module()
 
         def get_state_for_audio_prompt(self, conditioning: object) -> object:
             calls.append(conditioning)
