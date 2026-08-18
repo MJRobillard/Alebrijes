@@ -74,6 +74,26 @@ def test_generate_token_is_random_each_call() -> None:
     assert generate_token() != generate_token()
 
 
+# --- frontend index route ----------------------------------------------
+#
+# Deliberately unauthenticated (the page has to load before it can present a
+# token), so the important thing to verify is that it never leaks the
+# server's own secret token into that unauthenticated response.
+
+
+def test_index_route_requires_no_token() -> None:
+    client = _client()
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "<html" in response.text.lower()
+
+
+def test_index_route_does_not_leak_the_server_token() -> None:
+    client = _client()
+    response = client.get("/")
+    assert TOKEN not in response.text
+
+
 # --- /api/cast -----------------------------------------------------------
 
 
@@ -91,8 +111,10 @@ def test_cast_endpoint_creates_cast_file_and_returns_characters(tmp_path: Path) 
     assert response.status_code == 200
     body = response.json()
     assert Path(body["cast_path"]).exists()
-    assert "Colin" in body["characters"]
-    assert "Narrator" in body["characters"]
+    characters = [entry["character"] for entry in body["entries"]]
+    assert "Colin" in characters
+    assert "Narrator" in characters
+    assert all(entry["voice_state_path"] for entry in body["entries"])
 
 
 def test_cast_endpoint_rejects_unsupported_format(tmp_path: Path) -> None:
@@ -103,6 +125,38 @@ def test_cast_endpoint_rejects_unsupported_format(tmp_path: Path) -> None:
     response = client.post("/api/cast", headers=_headers(), json={"book": str(unsupported)})
 
     assert response.status_code == 422
+
+
+def test_update_cast_endpoint_persists_edited_voices(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(
+        CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")]),
+        cast_path,
+    )
+
+    client = _client()
+    response = client.put(
+        "/api/cast",
+        headers=_headers(),
+        json={"cast_path": str(cast_path), "entries": [{"character": "Narrator", "voice_state_path": "custom.pt"}]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["entries"] == [{"character": "Narrator", "voice_state_path": "custom.pt"}]
+    from alebrijes.cast import load as load_cast
+
+    assert load_cast(cast_path).voice_for("Narrator") == "custom.pt"
+
+
+def test_update_cast_endpoint_rejects_missing_cast_file(tmp_path: Path) -> None:
+    client = _client()
+    response = client.put(
+        "/api/cast",
+        headers=_headers(),
+        json={"cast_path": str(tmp_path / "missing.yaml"), "entries": []},
+    )
+    assert response.status_code == 400
 
 
 def test_cast_endpoint_rejects_missing_book(tmp_path: Path) -> None:

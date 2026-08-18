@@ -37,6 +37,13 @@ def _ingest_book(book_path: Path):
     return parse(book_path)
 
 
+def _cmd_gui(args: argparse.Namespace) -> int:
+    from alebrijes.gui import main as gui_main
+
+    gui_main()
+    return 0
+
+
 def _cmd_voices(args: argparse.Namespace) -> int:
     if args.voices_command == "add":
         return _cmd_voices_add(args)
@@ -125,6 +132,9 @@ def _cmd_render(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="alebrijes", description="Local, multi-voice book-to-audiobook engine.")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    gui = subparsers.add_parser("gui", help="Launch the desktop app window.")
+    gui.set_defaults(func=_cmd_gui)
 
     voices = subparsers.add_parser("voices", help="Create or list cloned voice states.")
     voices.set_defaults(func=_cmd_voices)

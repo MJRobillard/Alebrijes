@@ -35,9 +35,10 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from alebrijes.cast import CastFile, load as load_cast, save as save_cast
+from alebrijes.cast import CastEntry, CastFile, load as load_cast, save as save_cast
 from alebrijes.cast.build import LOW_CONFIDENCE_THRESHOLD, build_cast_file
 from alebrijes.ingest import Book
 from alebrijes.render import render_book as default_render_book
@@ -61,10 +62,27 @@ class CastRequest(BaseModel):
     out: Optional[str] = None
 
 
+class CastEntryModel(BaseModel):
+    character: str
+    voice_state_path: str
+
+
+class LowConfidenceLine(BaseModel):
+    character: str
+    confidence: float
+    text: str
+
+
 class CastResponse(BaseModel):
     cast_path: str
-    characters: list[str]
-    low_confidence_count: int
+    book_title: str
+    entries: list[CastEntryModel]
+    low_confidence_lines: list[LowConfidenceLine]
+
+
+class CastUpdateRequest(BaseModel):
+    cast_path: str
+    entries: list[CastEntryModel]
 
 
 class RenderRequest(BaseModel):
@@ -151,8 +169,38 @@ def create_app(
 
         return CastResponse(
             cast_path=str(out_path),
-            characters=[entry.character for entry in result.cast_file.entries],
-            low_confidence_count=len(result.low_confidence()),
+            book_title=result.cast_file.book_title,
+            entries=[
+                CastEntryModel(character=e.character, voice_state_path=e.voice_state_path)
+                for e in result.cast_file.entries
+            ],
+            low_confidence_lines=[
+                LowConfidenceLine(character=a.character, confidence=a.confidence, text=a.span.text)
+                for a in result.low_confidence()
+            ],
+        )
+
+    @app.put("/api/cast", response_model=CastResponse, dependencies=[Depends(_verify_request)])
+    def update_cast(payload: CastUpdateRequest) -> CastResponse:
+        cast_path = Path(payload.cast_path)
+        try:
+            existing = load_cast(cast_path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        updated = CastFile(
+            book_title=existing.book_title,
+            entries=[CastEntry(character=e.character, voice_state_path=e.voice_state_path) for e in payload.entries],
+        )
+        save_cast(updated, cast_path)
+
+        return CastResponse(
+            cast_path=str(cast_path),
+            book_title=updated.book_title,
+            entries=[
+                CastEntryModel(character=e.character, voice_state_path=e.voice_state_path) for e in updated.entries
+            ],
+            low_confidence_lines=[],
         )
 
     def _run_render_job(job_id: str, book_path: Path, cast_file: CastFile, out_path: Path, pause_ms: int) -> None:
@@ -214,7 +262,21 @@ def create_app(
                 error=job.error,
             )
 
+    # Deliberately NOT behind _verify_request: this is just the static app
+    # shell (HTML/CSS/JS), no secret embedded in it. The token only ever
+    # appears in the URL pywebview navigates to directly (see gui.py) — the
+    # frontend JS reads it from the URL and attaches it to every /api/*
+    # call itself. Serving the shell without the token is what makes that
+    # possible in the first place (the page has to load before it can have
+    # a token to present).
+    @app.get("/", response_class=HTMLResponse)
+    def index() -> str:
+        return _FRONTEND_HTML_PATH.read_text(encoding="utf-8")
+
     return app
+
+
+_FRONTEND_HTML_PATH = Path(__file__).parent / "frontend" / "index.html"
 
 
 def run_server_blocking(host: str = "127.0.0.1", port: int | None = None) -> None:

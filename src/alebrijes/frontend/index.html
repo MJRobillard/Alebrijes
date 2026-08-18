@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Alebrijes</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f4f0;
+    --panel: #ffffff;
+    --ink: #1c1b19;
+    --ink-soft: #6b665c;
+    --line: #ded9cd;
+    --accent: #2f6f6b;
+    --accent-ink: #ffffff;
+    --danger: #a6432f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --panel: #1f2123;
+      --ink: #eceae4;
+      --ink-soft: #a09a8d;
+      --line: #34363a;
+      --accent: #4fa39d;
+      --accent-ink: #0e1a19;
+      --danger: #e08066;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  main {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
+  .subtitle { color: var(--ink-soft); margin: 0 0 2rem; font-size: 0.9rem; }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 1.25rem 1.4rem;
+    margin-bottom: 1.25rem;
+  }
+  section h2 { font-size: 1rem; margin: 0 0 0.9rem; }
+  section[disabled] { opacity: 0.5; pointer-events: none; }
+  button {
+    font: inherit;
+    background: var(--accent);
+    color: var(--accent-ink);
+    border: none;
+    border-radius: 5px;
+    padding: 0.5rem 0.9rem;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  .row { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
+  .path {
+    font-family: ui-monospace, monospace;
+    font-size: 0.82rem;
+    color: var(--ink-soft);
+    word-break: break-all;
+  }
+  table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+  th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); font-size: 0.9rem; }
+  th { color: var(--ink-soft); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  input[type=text] {
+    font: inherit;
+    width: 100%;
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--ink);
+  }
+  .review-line { font-size: 0.85rem; padding: 0.35rem 0; border-bottom: 1px solid var(--line); }
+  .review-line:last-child { border-bottom: none; }
+  .review-line .conf { color: var(--danger); font-family: ui-monospace, monospace; margin-right: 0.5rem; }
+  .progress-bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; margin: 0.6rem 0; }
+  .progress-bar > div { height: 100%; background: var(--accent); transition: width 0.2s; }
+  .status { font-size: 0.88rem; color: var(--ink-soft); }
+  .status.error { color: var(--danger); }
+  .status.done { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Alebrijes</h1>
+  <p class="subtitle">Local, multi-voice book-to-audiobook.</p>
+
+  <section id="book-section">
+    <h2>1. Choose a book</h2>
+    <div class="row">
+      <button id="choose-book-btn">Choose Book…</button>
+      <span id="book-path" class="path">No book selected.</span>
+    </div>
+  </section>
+
+  <section id="cast-section" disabled>
+    <h2>2. Build &amp; review cast</h2>
+    <div class="row">
+      <button id="build-cast-btn">Build Cast</button>
+      <span id="cast-status" class="status"></span>
+    </div>
+    <table id="cast-table" hidden>
+      <thead><tr><th>Character</th><th>Voice</th></tr></thead>
+      <tbody id="cast-rows"></tbody>
+    </table>
+    <div class="row" id="save-cast-row" hidden style="margin-top: 0.75rem;">
+      <button id="save-cast-btn" class="secondary">Save Cast Changes</button>
+      <span id="save-cast-status" class="status"></span>
+    </div>
+    <div id="review-lines" style="margin-top: 1rem;"></div>
+  </section>
+
+  <section id="render-section" disabled>
+    <h2>3. Render</h2>
+    <div class="row">
+      <button id="render-btn">Render Audiobook</button>
+    </div>
+    <div class="progress-bar" id="progress-bar" hidden><div id="progress-fill" style="width: 0%"></div></div>
+    <div id="render-status" class="status"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  const token = new URLSearchParams(window.location.search).get("token");
+  const state = { bookPath: null, castPath: null };
+
+  async function apiFetch(path, options) {
+    options = options || {};
+    const headers = Object.assign({ "X-Alebrijes-Token": token }, options.headers || {});
+    if (options.body) headers["Content-Type"] = "application/json";
+    const response = await fetch(path, Object.assign({}, options, { headers }));
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.detail || `Request failed (${response.status})`);
+    return body;
+  }
+
+  function withPywebviewApi(callback) {
+    if (window.pywebview && window.pywebview.api) return callback();
+    window.addEventListener("pywebviewready", callback, { once: true });
+  }
+
+  const bookPathEl = document.getElementById("book-path");
+  const castSection = document.getElementById("cast-section");
+  const renderSection = document.getElementById("render-section");
+
+  document.getElementById("choose-book-btn").addEventListener("click", function () {
+    withPywebviewApi(function () {
+      window.pywebview.api.pick_file().then(function (path) {
+        if (!path) return;
+        state.bookPath = path;
+        bookPathEl.textContent = path;
+        castSection.removeAttribute("disabled");
+      });
+    });
+  });
+
+  const castStatusEl = document.getElementById("cast-status");
+  const castTable = document.getElementById("cast-table");
+  const castRows = document.getElementById("cast-rows");
+  const reviewLinesEl = document.getElementById("review-lines");
+  const saveCastRow = document.getElementById("save-cast-row");
+  const saveCastStatusEl = document.getElementById("save-cast-status");
+
+  function renderCastTable(entries) {
+    castRows.innerHTML = "";
+    entries.forEach(function (entry, index) {
+      const tr = document.createElement("tr");
+      const nameTd = document.createElement("td");
+      nameTd.textContent = entry.character;
+      const voiceTd = document.createElement("td");
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = entry.voice_state_path;
+      input.dataset.character = entry.character;
+      input.dataset.index = index;
+      voiceTd.appendChild(input);
+      tr.appendChild(nameTd);
+      tr.appendChild(voiceTd);
+      castRows.appendChild(tr);
+    });
+    castTable.hidden = false;
+    saveCastRow.hidden = false;
+  }
+
+  function renderReviewLines(lines) {
+    if (!lines.length) {
+      reviewLinesEl.innerHTML = "";
+      return;
+    }
+    const heading = document.createElement("p");
+    heading.className = "status";
+    heading.textContent = lines.length + " line(s) need review (low attribution confidence):";
+    reviewLinesEl.innerHTML = "";
+    reviewLinesEl.appendChild(heading);
+    lines.slice(0, 15).forEach(function (line) {
+      const div = document.createElement("div");
+      div.className = "review-line";
+      const confSpan = document.createElement("span");
+      confSpan.className = "conf";
+      confSpan.textContent = "[" + line.confidence.toFixed(2) + "]";
+      div.appendChild(confSpan);
+      div.appendChild(document.createTextNode(line.character + ": “" + line.text + "”"));
+      reviewLinesEl.appendChild(div);
+    });
+  }
+
+  document.getElementById("build-cast-btn").addEventListener("click", function () {
+    castStatusEl.textContent = "Building cast…";
+    apiFetch("/api/cast", { method: "POST", body: JSON.stringify({ book: state.bookPath }) })
+      .then(function (result) {
+        state.castPath = result.cast_path;
+        castStatusEl.textContent = "Cast written to " + result.cast_path;
+        renderCastTable(result.entries);
+        renderReviewLines(result.low_confidence_lines);
+        renderSection.removeAttribute("disabled");
+      })
+      .catch(function (err) {
+        castStatusEl.textContent = "Error: " + err.message;
+      });
+  });
+
+  document.getElementById("save-cast-btn").addEventListener("click", function () {
+    const entries = Array.from(castRows.querySelectorAll("input[type=text]")).map(function (input) {
+      return { character: input.dataset.character, voice_state_path: input.value };
+    });
+    saveCastStatusEl.textContent = "Saving…";
+    apiFetch("/api/cast", { method: "PUT", body: JSON.stringify({ cast_path: state.castPath, entries: entries }) })
+      .then(function () {
+        saveCastStatusEl.textContent = "Saved.";
+      })
+      .catch(function (err) {
+        saveCastStatusEl.textContent = "Error: " + err.message;
+      });
+  });
+
+  const renderStatusEl = document.getElementById("render-status");
+  const progressBar = document.getElementById("progress-bar");
+  const progressFill = document.getElementById("progress-fill");
+
+  function pollRenderJob(jobId) {
+    apiFetch("/api/render/" + jobId).then(function (status) {
+      if (status.chapters_total > 0) {
+        progressBar.hidden = false;
+        const pct = Math.round((status.chapters_done / status.chapters_total) * 100);
+        progressFill.style.width = pct + "%";
+      }
+      if (status.status === "running") {
+        renderStatusEl.className = "status";
+        renderStatusEl.textContent =
+          "Rendering… (" + status.chapters_done + "/" + status.chapters_total + " chapters)";
+        setTimeout(function () { pollRenderJob(jobId); }, 500);
+      } else if (status.status === "done") {
+        renderStatusEl.className = "status done";
+        renderStatusEl.textContent = "Done. Saved to " + status.output_path;
+      } else {
+        renderStatusEl.className = "status error";
+        renderStatusEl.textContent = "Error: " + status.error;
+      }
+    });
+  }
+
+  document.getElementById("render-btn").addEventListener("click", function () {
+    progressFill.style.width = "0%";
+    renderStatusEl.className = "status";
+    renderStatusEl.textContent = "Starting render…";
+    apiFetch("/api/render", { method: "POST", body: JSON.stringify({ book: state.bookPath, cast: state.castPath }) })
+      .then(function (result) {
+        pollRenderJob(result.job_id);
+      })
+      .catch(function (err) {
+        renderStatusEl.className = "status error";
+        renderStatusEl.textContent = "Error: " + err.message;
+      });
+  });
+})();
+</script>
+</body>
+</html>
