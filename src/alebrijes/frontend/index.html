@@ -375,6 +375,7 @@
   const reviewLinesEl = document.getElementById("review-lines");
   const saveCastRow = document.getElementById("save-cast-row");
   const saveCastStatusEl = document.getElementById("save-cast-status");
+  const VOICE_PREVIEW_TEXT = 'Hi, this is my voice for narration, when in quotes "This is how I talk."';
 
   function buildVoiceSelect(currentPath, voices) {
     const select = document.createElement("select");
@@ -426,6 +427,20 @@
       const select = buildVoiceSelect(entry.voice_state_path, voices);
       select.dataset.character = entry.character;
       voiceTd.appendChild(select);
+
+      const previewBtn = document.createElement("button");
+      previewBtn.className = "secondary";
+      previewBtn.textContent = "▶ Preview";
+      previewBtn.style.marginLeft = "0.4rem";
+      previewBtn.addEventListener("click", function () {
+        playPreview(VOICE_PREVIEW_TEXT, select.value, previewBtn);
+      });
+      voiceTd.appendChild(previewBtn);
+
+      select.addEventListener("change", function () {
+        playPreview(VOICE_PREVIEW_TEXT, select.value, previewBtn);
+      });
+
       tr.appendChild(nameTd);
       tr.appendChild(voiceTd);
       castRows.appendChild(tr);
