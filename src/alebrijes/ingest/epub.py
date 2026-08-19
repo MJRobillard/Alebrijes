@@ -39,9 +39,21 @@ from alebrijes.ingest import Book, Chapter, Paragraph
 
 _DRM_MARKER = "META-INF/encryption.xml"
 
-_CHAPTER_HEADER_RE = re.compile(
+_STRONG_CHAPTER_HEADER_RE = re.compile(
     r"^\s*(?:chapter|chap\.?)\s*(\d+)\b|^\s*(\d+)\s*[:.]\s+", re.IGNORECASE
 )
+# A line that's *just* a number (nothing else) -- some books (e.g. Random
+# House's Red Rising/Golden Son EPUBs) render the chapter heading as a bare
+# number on its own line, with the actual chapter title as a *separate*
+# following line rather than on the same line as the number. Kept as a
+# distinct, weaker pattern (only consulted when a page has zero strong
+# matches, see `_chapter_start_indices`) rather than folded into
+# `_CHAPTER_HEADER_RE`: some chapter bodies contain an unrelated isolated
+# numeral line of their own (e.g. a running chapter-number footer), which
+# would otherwise push an otherwise-good strong-format page's match count
+# above one and wrongly disqualify it as a chapter start.
+_BARE_NUMBER_RE = re.compile(r"^\s*(\d{1,4})\s*$")
+_CHAPTER_HEADER_RE = re.compile(_STRONG_CHAPTER_HEADER_RE.pattern + r"|" + _BARE_NUMBER_RE.pattern, re.IGNORECASE)
 _IMG_ALT_RE = re.compile(r"<img\b[^>]*\balt\s*=\s*\"([^\"]*)\"", re.IGNORECASE)
 _IMG_ALT_CHAPTER_RE = re.compile(r"^\s*(\d+)\s+\S")
 _DC_TITLE_RE = re.compile(r"<dc:title[^>]*>(.*?)</dc:title>", re.IGNORECASE | re.DOTALL)
@@ -229,22 +241,40 @@ def _chapter_title(archive: zipfile.ZipFile, doc_path: str) -> str:
         if alt_text:
             return alt_text
     text = _extract_text_from_html(raw_html)
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped:
-            header_match = _CHAPTER_HEADER_RE.match(stripped)
-            return stripped[header_match.end() :].strip(" :.-") if header_match else stripped
-    return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for i, stripped in enumerate(lines):
+        header_match = _CHAPTER_HEADER_RE.match(stripped)
+        if not header_match:
+            # Not the header line yet -- e.g. a running book-title header
+            # repeated at the top of every page before the real chapter
+            # heading. Keep scanning rather than treating it as the title.
+            continue
+        remainder = stripped[header_match.end() :].strip(" :.-")
+        if remainder:
+            return remainder
+        # Bare-number heading ("1") with no title text on the same line --
+        # the title is the next line instead.
+        return lines[i + 1] if i + 1 < len(lines) else stripped
+    return lines[0] if lines else ""
 
 
-def _chapter_start_indices(archive: zipfile.ZipFile, spine_docs: list[str]) -> dict[int, int]:
-    """Maps chapter number -> spine index of that chapter's first document.
+def _chapter_start_indices(archive: zipfile.ZipFile, spine_docs: list[str]) -> list[int]:
+    """Returns the spine indices that start a chapter, in spine order.
 
     A table-of-contents page will match many chapter-header-shaped lines at
     once (one per chapter listed); only pages with exactly one match are
     treated as a real chapter start, not a listing page.
+
+    Deliberately *not* keyed/deduped by chapter number: an omnibus of
+    several books in one EPUB (e.g. a trilogy bind-up) restarts numbering
+    at "Chapter 1" for each sub-book, and a previous version of this
+    function used chapter number as a dict key, so every sub-book's repeat
+    of "Chapter 1", "Chapter 2", etc. was silently dropped as a duplicate —
+    collapsing most of the omnibus into a couple of giant merged chapters.
+    Spine position is always unique, so every real chapter start survives
+    regardless of how its number was labeled.
     """
-    chapter_to_spine_index: dict[int, int] = {}
+    indices: list[int] = []
     for idx, doc_path in enumerate(spine_docs):
         try:
             raw_html = archive.read(doc_path)
@@ -253,21 +283,21 @@ def _chapter_start_indices(archive: zipfile.ZipFile, spine_docs: list[str]) -> d
         text = _extract_text_from_html(raw_html)
         found = False
         if text:
-            matches: list[int] = []
-            for line in text.splitlines():
-                match = _CHAPTER_HEADER_RE.match(line)
-                if match:
-                    num_str = next((g for g in match.groups() if g), None)
-                    if num_str:
-                        matches.append(int(num_str))
-            if len(matches) == 1:
-                chapter_to_spine_index.setdefault(matches[0], idx)
+            lines = text.splitlines()
+            strong_matches = sum(1 for line in lines if _STRONG_CHAPTER_HEADER_RE.match(line))
+            if strong_matches == 1:
+                indices.append(idx)
                 found = True
+            elif strong_matches == 0:
+                bare_matches = sum(1 for line in lines if _BARE_NUMBER_RE.match(line))
+                if bare_matches == 1:
+                    indices.append(idx)
+                    found = True
         if not found:
             chapter_num = _chapter_number_from_img_alt(raw_html)
             if chapter_num is not None:
-                chapter_to_spine_index.setdefault(chapter_num, idx)
-    return chapter_to_spine_index
+                indices.append(idx)
+    return indices
 
 
 def _paragraphs_for_range(archive: zipfile.ZipFile, spine_docs: list[str], start: int, stop: int) -> list[Paragraph]:
@@ -299,15 +329,14 @@ def parse(path: Path) -> Book:
         spine_docs = _spine_documents(archive, opf_path)
         book_title = _book_title(archive, opf_path, fallback=path.stem)
 
-        chapter_to_index = _chapter_start_indices(archive, spine_docs)
-        if not chapter_to_index:
+        start_indices = _chapter_start_indices(archive, spine_docs)
+        if not start_indices:
             paragraphs = _paragraphs_for_range(archive, spine_docs, 0, len(spine_docs))
             return Book(title=book_title, chapters=[Chapter(title=book_title, index=0, paragraphs=paragraphs)])
 
-        ordered = sorted(chapter_to_index.items())
         chapters: list[Chapter] = []
-        for position, (_chapter_num, start_idx) in enumerate(ordered):
-            stop_idx = ordered[position + 1][1] if position + 1 < len(ordered) else len(spine_docs)
+        for position, start_idx in enumerate(start_indices):
+            stop_idx = start_indices[position + 1] if position + 1 < len(start_indices) else len(spine_docs)
             title = _chapter_title(archive, spine_docs[start_idx])
             paragraphs = _paragraphs_for_range(archive, spine_docs, start_idx, stop_idx)
             chapters.append(Chapter(title=title, index=position, paragraphs=paragraphs))

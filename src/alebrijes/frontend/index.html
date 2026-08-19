@@ -104,6 +104,33 @@
   #chapter-progress-list .mark { width: 1.1rem; text-align: center; font-family: ui-monospace, monospace; }
   footer { margin-top: 1.5rem; font-size: 0.78rem; color: var(--ink-soft); text-align: center; }
   footer a { color: inherit; }
+  .dual-range { position: relative; height: 1.6rem; }
+  .dual-range-track {
+    position: absolute; top: 50%; left: 0; right: 0; height: 4px;
+    transform: translateY(-50%); background: var(--line); border-radius: 2px;
+  }
+  .dual-range-fill {
+    position: absolute; top: 50%; height: 4px; transform: translateY(-50%);
+    background: var(--accent); border-radius: 2px;
+  }
+  .dual-range input[type=range] {
+    position: absolute; top: 0; left: 0; width: 100%; margin: 0;
+    -webkit-appearance: none; appearance: none; background: none;
+    pointer-events: none; height: 1.6rem;
+  }
+  .dual-range input[type=range]::-webkit-slider-runnable-track { -webkit-appearance: none; background: none; }
+  .dual-range input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; pointer-events: auto;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--accent); border: 2px solid var(--panel);
+    box-shadow: 0 0 0 1px var(--accent); cursor: pointer; margin-top: -6px;
+  }
+  .dual-range input[type=range]::-moz-range-track { background: none; border: none; }
+  .dual-range input[type=range]::-moz-range-thumb {
+    pointer-events: auto; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--accent); border: 2px solid var(--panel);
+    box-shadow: 0 0 0 1px var(--accent); cursor: pointer;
+  }
   #warning-banner {
     background: var(--amber-bg, #f3e3c9);
     border: 1px solid var(--danger);
@@ -153,6 +180,18 @@
 
   <section id="cast-section" disabled>
     <h2>2. Build &amp; review cast</h2>
+    <div id="chapter-range-row" hidden style="margin-bottom: 1.1rem;">
+      <div class="row" style="justify-content: space-between; margin-bottom: 0.4rem;">
+        <strong id="chapter-range-label" style="font-size: 0.9rem;"></strong>
+      </div>
+      <div class="dual-range" id="chapter-dual-range">
+        <div class="dual-range-track"></div>
+        <div class="dual-range-fill" id="chapter-range-fill"></div>
+        <input type="range" id="chapter-start-range" min="1" step="1">
+        <input type="range" id="chapter-end-range" min="1" step="1">
+      </div>
+      <p class="hint" style="margin: 0.5rem 0 0;">Only these chapters will be cast — useful for an omnibus with several books in one file.</p>
+    </div>
     <div class="row">
       <button id="build-cast-btn">Build Cast</button>
       <span id="cast-status" class="status"></span>
@@ -215,6 +254,60 @@
   const bookPathEl = document.getElementById("book-path");
   const castSection = document.getElementById("cast-section");
   const renderSection = document.getElementById("render-section");
+  const chapterRangeRow = document.getElementById("chapter-range-row");
+  const chapterRangeLabel = document.getElementById("chapter-range-label");
+  const chapterRangeFill = document.getElementById("chapter-range-fill");
+  const chapterStartRange = document.getElementById("chapter-start-range");
+  const chapterEndRange = document.getElementById("chapter-end-range");
+  state.chapters = [];
+
+  function chapterTitle(oneBasedIndex) {
+    const ch = state.chapters[oneBasedIndex - 1];
+    return ch ? ch.title : "Chapter " + oneBasedIndex;
+  }
+
+  function updateChapterRangeUi() {
+    let start = parseInt(chapterStartRange.value, 10);
+    let end = parseInt(chapterEndRange.value, 10);
+    if (start > end) {
+      // Keep the two handles from crossing -- whichever the user is
+      // actively dragging pushes the other one along with it.
+      if (document.activeElement === chapterStartRange) {
+        end = start;
+        chapterEndRange.value = String(end);
+      } else {
+        start = end;
+        chapterStartRange.value = String(start);
+      }
+    }
+    const min = parseInt(chapterStartRange.min, 10);
+    const max = parseInt(chapterStartRange.max, 10);
+    const span = Math.max(max - min, 1);
+    const leftPct = ((start - min) / span) * 100;
+    const rightPct = ((end - min) / span) * 100;
+    chapterRangeFill.style.left = leftPct + "%";
+    chapterRangeFill.style.width = (rightPct - leftPct) + "%";
+    chapterRangeLabel.textContent = start === end
+      ? "Chapter " + start + ": " + chapterTitle(start)
+      : "Chapters " + start + "–" + end + ": " + chapterTitle(start) + " – " + chapterTitle(end);
+  }
+
+  chapterStartRange.addEventListener("input", updateChapterRangeUi);
+  chapterEndRange.addEventListener("input", updateChapterRangeUi);
+
+  function populateChapterRange(chapters) {
+    state.chapters = chapters;
+    if (chapters.length <= 1) {
+      chapterRangeRow.hidden = true;
+      return;
+    }
+    chapterStartRange.max = String(chapters.length);
+    chapterEndRange.max = String(chapters.length);
+    chapterStartRange.value = "1";
+    chapterEndRange.value = String(chapters.length);
+    chapterRangeRow.hidden = false;
+    updateChapterRangeUi();
+  }
 
   document.getElementById("choose-book-btn").addEventListener("click", function () {
     withPywebviewApi(function () {
@@ -223,6 +316,11 @@
         state.bookPath = path;
         bookPathEl.textContent = path;
         castSection.removeAttribute("disabled");
+        state.chapters = [];
+        chapterRangeRow.hidden = true;
+        apiFetch("/api/book/chapters", { method: "POST", body: JSON.stringify({ book: path }) })
+          .then(function (result) { populateChapterRange(result.chapters); })
+          .catch(function () { /* range picker just stays hidden; cast still runs on the whole book */ });
       });
     });
   });
@@ -410,8 +508,13 @@
 
   document.getElementById("build-cast-btn").addEventListener("click", function () {
     castStatusEl.textContent = "Building cast…";
+    const castPayload = { book: state.bookPath };
+    if (state.chapters.length && !chapterRangeRow.hidden) {
+      castPayload.chapter_start = parseInt(chapterStartRange.value, 10);
+      castPayload.chapter_end = parseInt(chapterEndRange.value, 10);
+    }
     Promise.all([
-      apiFetch("/api/cast", { method: "POST", body: JSON.stringify({ book: state.bookPath }) }),
+      apiFetch("/api/cast", { method: "POST", body: JSON.stringify(castPayload) }),
       apiFetch("/api/voices"),
     ])
       .then(function (results) {

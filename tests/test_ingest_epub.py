@@ -155,6 +155,59 @@ def test_parse_skips_manifest_entries_missing_from_archive(tmp_path: Path) -> No
     assert book.chapters[0].paragraphs[-1].text == "Real content."
 
 
+def test_parse_does_not_merge_repeated_chapter_numbers_across_subbooks(tmp_path: Path) -> None:
+    # Regression test for an omnibus EPUB (e.g. a "Red Rising Saga 1-6"
+    # bind-up of six novels in one file): each sub-book restarts its own
+    # chapter numbering at "Chapter 1". An earlier version of the parser
+    # keyed detected chapter starts by chapter *number*, so book two's
+    # "Chapter 1"/"Chapter 2" were treated as duplicates of book one's and
+    # silently dropped -- collapsing the whole second book into book one's
+    # last chapter instead of splitting it out.
+    epub_path = tmp_path / "omnibus.epub"
+    _build_epub(
+        epub_path,
+        "Omnibus Fixture",
+        {
+            "b1c1.xhtml": "<p>Chapter 1: Alpha</p><p>Book one chapter one text.</p>",
+            "b1c2.xhtml": "<p>Chapter 2: Beta</p><p>Book one chapter two text.</p>",
+            "b2c1.xhtml": "<p>Chapter 1: Gamma</p><p>Book two chapter one text.</p>",
+            "b2c2.xhtml": "<p>Chapter 2: Delta</p><p>Book two chapter two text.</p>",
+        },
+    )
+
+    book = parse(epub_path)
+
+    assert [c.title for c in book.chapters] == ["Alpha", "Beta", "Gamma", "Delta"]
+    assert [p.text for p in book.chapters[3].paragraphs] == [
+        "Chapter 2: Delta",
+        "Book two chapter two text.",
+    ]
+
+
+def test_parse_handles_bare_number_chapter_headings_restarting_per_subbook(tmp_path: Path) -> None:
+    # Some publishers (e.g. Random House's Red Rising/Golden Son EPUBs)
+    # render the chapter heading as a bare number on its own line -- with a
+    # running book-title line above it and the real chapter title on a
+    # *separate* line below it -- rather than "Chapter N: Title" on one
+    # line. Also exercises the omnibus case: both "sub-books" restart their
+    # numbering at "1".
+    epub_path = tmp_path / "omnibus_bare.epub"
+    _build_epub(
+        epub_path,
+        "Omnibus Fixture",
+        {
+            "b1c1.xhtml": "<p>Book One</p><p>1</p><p>ALPHA</p><p>Book one chapter one text.</p>",
+            "b1c2.xhtml": "<p>Book One</p><p>2</p><p>BETA</p><p>Book one chapter two text.</p>",
+            "b2c1.xhtml": "<p>Book Two</p><p>1</p><p>GAMMA</p><p>Book two chapter one text.</p>",
+            "b2c2.xhtml": "<p>Book Two</p><p>2</p><p>DELTA</p><p>Book two chapter two text.</p>",
+        },
+    )
+
+    book = parse(epub_path)
+
+    assert [c.title for c in book.chapters] == ["ALPHA", "BETA", "GAMMA", "DELTA"]
+
+
 def test_parse_normalizes_ligatures_to_ascii(tmp_path: Path) -> None:
     epub_path = tmp_path / "book.epub"
     _build_epub(

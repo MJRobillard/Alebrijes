@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from typing import Optional
 
 from alebrijes.attribute import Attribution
 from alebrijes.attribute.rules import UNKNOWN, RuleBasedAttributor
@@ -42,12 +43,24 @@ class CastResult:
         return [a for a in self.attributions if a.confidence < LOW_CONFIDENCE_THRESHOLD]
 
 
-def build_cast_file(book: Book) -> CastResult:
+def build_cast_file(
+    book: Book, chapter_start: Optional[int] = None, chapter_end: Optional[int] = None
+) -> CastResult:
+    """chapter_start/chapter_end are 1-based, inclusive chapter numbers (matching
+    the numbering shown in the GUI/render progress list). Omit either to leave
+    that end of the range open. Useful for an omnibus file where only a few
+    chapters (e.g. one book of a multi-book volume) should be cast at a time."""
     attributor = RuleBasedAttributor()
     all_attributions: list[Attribution] = []
     characters: list[str] = []
 
-    for chapter in book.chapters:
+    chapters = book.chapters
+    if chapter_start is not None or chapter_end is not None:
+        start = chapter_start if chapter_start is not None else 1
+        end = chapter_end if chapter_end is not None else len(chapters)
+        chapters = [c for c in chapters if start <= c.index + 1 <= end]
+
+    for chapter in chapters:
         spans = [span for paragraph in chapter.paragraphs for span in segment_paragraph(paragraph, chapter.index)]
         for attribution in attributor.attribute(spans):
             all_attributions.append(attribution)

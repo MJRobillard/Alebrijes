@@ -63,6 +63,21 @@ def generate_token() -> str:
 class CastRequest(BaseModel):
     book: str
     out: Optional[str] = None
+    chapter_start: Optional[int] = None
+    chapter_end: Optional[int] = None
+
+
+class BookChaptersRequest(BaseModel):
+    book: str
+
+
+class ChapterInfo(BaseModel):
+    index: int  # 0-based
+    title: str
+
+
+class BookChaptersResponse(BaseModel):
+    chapters: list[ChapterInfo]
 
 
 class CastEntryModel(BaseModel):
@@ -264,6 +279,22 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return Response(content=audio_bytes, media_type="audio/wav")
 
+    @app.post("/api/book/chapters", response_model=BookChaptersResponse, dependencies=[Depends(_verify_request)])
+    def book_chapters(payload: BookChaptersRequest) -> BookChaptersResponse:
+        book_path = Path(payload.book)
+        try:
+            book = ingest_book(book_path)
+        except NotImplementedError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return BookChaptersResponse(
+            chapters=[
+                ChapterInfo(index=c.index, title=c.title or f"Chapter {c.index + 1}") for c in book.chapters
+            ]
+        )
+
     @app.post("/api/cast", response_model=CastResponse, dependencies=[Depends(_verify_request)])
     def cast(payload: CastRequest) -> CastResponse:
         book_path = Path(payload.book)
@@ -274,7 +305,13 @@ def create_app(
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        result = build_cast_file(book)
+        if payload.chapter_start is not None and payload.chapter_end is not None:
+            if payload.chapter_start < 1 or payload.chapter_end < payload.chapter_start:
+                raise HTTPException(status_code=400, detail="Invalid chapter range.")
+            if payload.chapter_start > len(book.chapters):
+                raise HTTPException(status_code=400, detail="Chapter range is out of bounds for this book.")
+
+        result = build_cast_file(book, chapter_start=payload.chapter_start, chapter_end=payload.chapter_end)
         out_path = Path(payload.out) if payload.out else book_path.with_suffix(".cast.yaml")
         save_cast(result.cast_file, out_path)
 
