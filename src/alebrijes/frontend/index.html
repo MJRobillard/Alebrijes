@@ -160,15 +160,15 @@
   <section id="import-voice-section">
     <h2>Import a voice <span class="badge">optional</span></h2>
     <p class="hint">
-      Import an existing voice-state (<code>.pt</code>) file. This app doesn't clone voices
-      from audio itself — that needs pocket-tts's gated cloning model, which isn't bundled
-      here to keep setup simple (no account, no login). To create a <code>.pt</code> file
-      from an audio sample, use the <code>alebrijes voices add</code> command on a source
-      install (a one-time Hugging Face login is required there — see the README), then
-      import the result here.
+      Import an existing voice-state (<code>.pt</code> or <code>.safetensors</code>) file.
+      This app doesn't clone voices from audio itself — that needs pocket-tts's gated
+      cloning model, which isn't bundled here to keep setup simple (no account, no login).
+      To create a voice-state file from an audio sample, use the
+      <code>alebrijes voices add</code> command on a source install (a one-time Hugging
+      Face login is required there — see the README), then import the result here.
     </p>
     <div class="row">
-      <button id="choose-voice-file-btn">Choose Voice File (.pt)…</button>
+      <button id="choose-voice-file-btn">Choose Voice File (.pt/.safetensors)…</button>
       <span id="voice-file-path" class="path">No file selected.</span>
     </div>
     <div class="row" style="margin-top: 0.6rem;">
@@ -344,7 +344,7 @@
 
     if (!state.voiceFilePath) {
       importVoiceStatusEl.className = "status error";
-      importVoiceStatusEl.textContent = "Choose a voice-state (.pt) file first.";
+      importVoiceStatusEl.textContent = "Choose a voice-state (.pt or .safetensors) file first.";
       return;
     }
     if (!name) {

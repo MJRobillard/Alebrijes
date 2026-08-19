@@ -22,7 +22,7 @@ import threading
 from typing import Optional
 
 _BOOK_FILE_TYPES = ("Book files (*.epub;*.pdf;*.txt)", "All files (*.*)")
-_VOICE_FILE_TYPES = ("Voice state files (*.pt)", "All files (*.*)")
+_VOICE_FILE_TYPES = ("Voice state files (*.pt;*.safetensors)", "All files (*.*)")
 
 
 class FileApi:

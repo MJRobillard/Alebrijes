@@ -114,7 +114,7 @@ class VoicesResponse(BaseModel):
 
 
 class ImportVoiceRequest(BaseModel):
-    source: str  # path to an existing voice-state .pt file
+    source: str  # path to an existing voice-state .pt or .safetensors file
     name: str
 
 
@@ -160,13 +160,23 @@ SynthesizePreviewFn = Callable[[str, str], bytes]
 ImportVoiceFn = Callable[[Path, str, Path], Path]
 
 
-def _load_voice_state_for_validation(source_path: Path) -> None:
+def _load_voice_state_dict(source_path: Path) -> dict:
+    # .safetensors is loaded and re-saved as a torch-pickle .pt below --
+    # every other consumer of a voice state (render.py, the *.pt glob in
+    # /api/voices and `alebrijes voices list`) expects a torch-pickle file,
+    # so normalizing here at import time keeps that assumption everywhere
+    # else instead of teaching every consumer two formats.
+    if source_path.suffix.lower() == ".safetensors":
+        from safetensors.torch import load_file
+
+        return load_file(str(source_path))
+
     import torch
 
     try:
-        torch.load(source_path, map_location="cpu", weights_only=False)
+        return torch.load(source_path, map_location="cpu", weights_only=False)
     except TypeError:
-        torch.load(source_path, map_location="cpu")
+        return torch.load(source_path, map_location="cpu")
 
 
 def _default_import_voice(source_path: Path, name: str, voices_dir: Path) -> Path:
@@ -175,19 +185,19 @@ def _default_import_voice(source_path: Path, name: str, voices_dir: Path) -> Pat
     # cloning at all. Voice states come from elsewhere (e.g. `alebrijes
     # voices add` on a source/dev install, which does have that
     # capability, via a one-time HF login) and get imported here as
-    # already-computed .pt files -- validated, not blindly copied, so a
-    # wrong file fails clearly now instead of cryptically the next time
-    # this voice is used to render.
-    import shutil
+    # already-computed .pt/.safetensors files -- validated (by loading),
+    # not blindly copied, so a wrong file fails clearly now instead of
+    # cryptically the next time this voice is used to render.
+    import torch
 
     try:
-        _load_voice_state_for_validation(source_path)
+        state = _load_voice_state_dict(source_path)
     except Exception as exc:
         raise ValueError(f"'{source_path}' doesn't look like a valid voice-state file: {exc}") from exc
 
     voices_dir.mkdir(parents=True, exist_ok=True)
     out_path = voices_dir / f"{name}.pt"
-    shutil.copy2(source_path, out_path)
+    torch.save(state, out_path)
     return out_path
 
 
@@ -250,10 +260,10 @@ def create_app(
         source_path = Path(payload.source)
         if not source_path.exists():
             raise HTTPException(status_code=400, detail=f"Voice file not found: {source_path}")
-        if source_path.suffix.lower() != ".pt":
+        if source_path.suffix.lower() not in (".pt", ".safetensors"):
             raise HTTPException(
                 status_code=400,
-                detail=f"'{source_path}' doesn't look like a voice-state file (expected .pt).",
+                detail=f"'{source_path}' doesn't look like a voice-state file (expected .pt or .safetensors).",
             )
         name = payload.name.strip()
         if not name:

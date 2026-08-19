@@ -20,6 +20,7 @@ dependencies = [
   "uvicorn[standard]",
   "pywebview",
   "imageio-ffmpeg",  # bundles a real static ffmpeg binary -- no system install needed
+  "safetensors",  # imported voice states may be .safetensors, not just torch-pickle .pt
 ]
 
 [project.optional-dependencies]

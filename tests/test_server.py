@@ -230,6 +230,23 @@ def test_default_import_voice_accepts_a_real_torch_state(tmp_path: Path) -> None
     assert torch.load(imported, weights_only=False) == {"conditioning": "alba"}
 
 
+def test_default_import_voice_accepts_a_safetensors_file(tmp_path: Path) -> None:
+    import torch
+    from safetensors.torch import save_file
+
+    source = tmp_path / "real.safetensors"
+    save_file({"conditioning": torch.tensor([1.0, 2.0, 3.0])}, str(source))
+    voices_dir = tmp_path / "voices"
+
+    client = _client(voices_dir=voices_dir)  # default import_voice_fn
+    response = client.post("/api/voices", headers=_headers(), json={"source": str(source), "name": "narrator"})
+
+    assert response.status_code == 200
+    imported = voices_dir / "narrator.pt"
+    assert imported.exists()
+    assert torch.equal(torch.load(imported, weights_only=False)["conditioning"], torch.tensor([1.0, 2.0, 3.0]))
+
+
 # --- /api/preview ----------------------------------------------------------
 
 
