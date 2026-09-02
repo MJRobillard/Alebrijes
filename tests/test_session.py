@@ -184,6 +184,26 @@ def test_advance_position_checkpoint_prompt_also_supports_on_delta() -> None:
     assert event.text == "Pause point."
 
 
+def test_extend_transcript_appends_spans_and_updates_seq_lookup() -> None:
+    session = _session(num_spans=2)
+    new_span = SpanTiming(
+        span_id="0.2.0",
+        chapter_index=1,
+        paragraph_index=0,
+        character="Narrator",
+        kind=SpanKind.NARRATION,
+        text="A new chapter begins.",
+        start_ms=2000,
+        end_ms=3000,
+    )
+
+    session.extend_transcript([new_span])
+
+    assert len(session.transcript.spans) == 3
+    session.advance_position("0.2.0")
+    assert session.current_seq == 2
+
+
 def test_history_is_capped_to_history_limit() -> None:
     session = _session(history_limit=2)
     for i in range(5):

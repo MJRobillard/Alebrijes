@@ -95,6 +95,16 @@ class InteractiveSession:
         span = self.transcript.spans[self.current_seq]
         return f"chapter {span.chapter_index + 1}, near: “{span.text[:80]}”"
 
+    def extend_transcript(self, new_spans: list) -> None:
+        """Appends newly-available spans (e.g. a chapter a live
+        `session.buffer.LookaheadRenderer` just finished) to the transcript
+        this session was constructed with, keeping `current_seq`/RAG
+        position-bounding correct for a book that's still being rendered."""
+        start_seq = len(self.transcript.spans)
+        self.transcript.spans.extend(new_spans)
+        for offset, span in enumerate(new_spans):
+            self._seq_by_span_id[span.span_id] = start_seq + offset
+
     def _retrieve(self, query_text: str, *, max_seq: Optional[int] = None) -> list:
         if not self.rag_index.entries:
             return []

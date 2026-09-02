@@ -26,6 +26,7 @@ future refinement, not built in this pass.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import secrets
@@ -35,9 +36,11 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Iterator, Optional
+from typing import Callable, Iterator, Optional
 
+import numpy as np
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
@@ -49,10 +52,7 @@ from alebrijes.preview import synthesize_preview as default_synthesize_preview
 from alebrijes.render import NARRATOR, render_book as default_render_book
 from alebrijes.session import InteractiveSession, SessionMode
 from alebrijes.synth.streaming import SentenceChunker
-from alebrijes.transcript import load as load_transcript
-
-if TYPE_CHECKING:
-    import numpy as np
+from alebrijes.transcript import Transcript, load as load_transcript
 
 
 def _default_build_narrator_agent(cast_file: CastFile) -> object:
@@ -246,6 +246,16 @@ class SessionStartResponse(BaseModel):
     spoken: bool  # whether a narrator TTS agent was available for spoken responses
 
 
+class SessionStartLiveRequest(BaseModel):
+    book: str
+    cast: str
+    mode: str = "qa"
+    checkpoints: list[str] = []
+    lookahead_chapters: int = 2
+    rag_npz: Optional[str] = None
+    rag_json: Optional[str] = None
+
+
 IngestFn = Callable[[Path], Book]
 RenderFn = Callable[..., Path]
 SynthesizePreviewFn = Callable[[str, str], bytes]
@@ -253,6 +263,13 @@ EmbedFn = Callable[[str], "np.ndarray"]
 ChatStreamFn = Callable[..., Iterator[str]]
 ImportVoiceFn = Callable[[Path, str, Path], Path]
 BuildNarratorAgentFn = Callable[[CastFile], object]
+BuildRenderPipelineFn = Callable[[CastFile], tuple]  # -> (TTSAgent, voice_states dict)
+
+
+def _default_build_render_pipeline(cast_file: CastFile) -> tuple:
+    from alebrijes.render import build_render_agent
+
+    return build_render_agent(cast_file)
 
 
 def _load_voice_state_dict(source_path: Path) -> dict:
@@ -324,6 +341,7 @@ def create_app(
     embed_fn: Optional[EmbedFn] = None,
     chat_stream_fn: Optional[ChatStreamFn] = None,
     build_narrator_agent_fn: BuildNarratorAgentFn = _default_build_narrator_agent,
+    build_render_pipeline_fn: BuildRenderPipelineFn = _default_build_render_pipeline,
 ) -> FastAPI:
     if voices_dir is None:
         voices_dir = Config().voices_dir
@@ -677,6 +695,86 @@ def create_app(
 
         return SessionStartResponse(session_id=session_id, book_title=transcript.book_title, spoken=agent is not None)
 
+    @app.post("/api/session/start_live", response_model=SessionStartResponse, dependencies=[Depends(_verify_request)])
+    def session_start_live(payload: SessionStartLiveRequest) -> SessionStartResponse:
+        # Live mode: start listening while the book renders instead of
+        # waiting for a whole-book `alebrijes render` first. No .m4b/
+        # .transcript.json needed -- the transcript is built up chapter by
+        # chapter as session_ws's chapter-drain task consumes
+        # LookaheadRenderer's output (see session/buffer.py).
+        import queue as queue_module
+
+        from alebrijes.rag import RagIndex, load as load_rag_index
+        from alebrijes.session.buffer import LookaheadRenderer
+
+        try:
+            book = ingest_book(Path(payload.book))
+        except Exception as exc:  # noqa: BLE001 - reported to the client, not swallowed
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not book.chapters:
+            raise HTTPException(status_code=400, detail="Book has no chapters to render.")
+
+        try:
+            cast_file = load_cast(Path(payload.cast))
+        except (FileNotFoundError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            mode = SessionMode(payload.mode)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Unknown mode: {payload.mode!r}")
+
+        try:
+            agent, voice_states = build_render_pipeline_fn(cast_file)
+        except Exception as exc:  # noqa: BLE001 - live mode has no pre-rendered audio to fall back on
+            raise HTTPException(status_code=400, detail=f"Could not prepare narrator voice: {exc}") from exc
+
+        rag_index = RagIndex(entries=[], vectors=np.zeros((0, 0), dtype=np.float32))
+        if payload.rag_npz and payload.rag_json:
+            npz_path, json_path = Path(payload.rag_npz), Path(payload.rag_json)
+            if npz_path.exists() and json_path.exists():
+                rag_index = load_rag_index(npz_path, json_path)
+
+        transcript = Transcript(book_title=book.title, chapters=[], spans=[])
+        interactive_session = InteractiveSession(
+            book_title=book.title,
+            character_voice=NARRATOR,
+            transcript=transcript,
+            rag_index=rag_index,
+            embed_fn=embed_fn,
+            chat_stream_fn=chat_stream_fn,
+            mode=mode,
+            checkpoints=payload.checkpoints,
+        )
+
+        chapter_queue: "queue_module.Queue" = queue_module.Queue()
+        total_chapters = len(book.chapters)
+
+        def on_chapter_ready(chapter_audio) -> None:
+            chapter_queue.put(chapter_audio)
+            if chapter_audio.chapter_index == total_chapters - 1:
+                chapter_queue.put(None)  # sentinel: no more chapters coming
+
+        renderer = LookaheadRenderer(
+            book,
+            cast_file,
+            voice_states,
+            agent,
+            lookahead_chapters=payload.lookahead_chapters,
+            on_chapter_ready=on_chapter_ready,
+        )
+        renderer.start()
+
+        session_id = uuid.uuid4().hex
+        sessions[session_id] = {
+            "session": interactive_session,
+            "agent": agent,
+            "renderer": renderer,
+            "chapter_queue": chapter_queue,
+        }
+
+        return SessionStartResponse(session_id=session_id, book_title=book.title, spoken=True)
+
     @app.websocket("/api/session/{session_id}/ws")
     async def session_ws(websocket: WebSocket, session_id: str) -> None:
         supplied = websocket.query_params.get("token")
@@ -696,12 +794,58 @@ def create_app(
         await websocket.accept()
         interactive_session: InteractiveSession = entry["session"]
         agent = entry["agent"]
+        renderer = entry.get("renderer")
+        chapter_queue = entry.get("chapter_queue")
+
+        # Two coroutines can both push frames on this socket -- the request/
+        # response loop below, and (for a live session) the chapter-drain
+        # task. A lock keeps their sends from interleaving mid-frame.
+        send_lock = asyncio.Lock()
+
+        async def _send(payload: dict) -> None:
+            async with send_lock:
+                await websocket.send_json(payload)
 
         async def _send_audio(audio: "np.ndarray") -> None:
             wav_bytes = _audio_to_wav_bytes(agent.sample_rate, audio)
-            await websocket.send_json(
-                {"type": "audio_chunk", "sample_rate": agent.sample_rate, "data": base64.b64encode(wav_bytes).decode("ascii")}
-            )
+            await _send({"type": "audio_chunk", "sample_rate": agent.sample_rate, "data": base64.b64encode(wav_bytes).decode("ascii")})
+
+        async def _drain_chapters() -> None:
+            # Runs alongside the receive loop for a live (still-rendering)
+            # session, forwarding each chapter's audio + span timings as
+            # LookaheadRenderer finishes it (see session/buffer.py) -- a
+            # thread -> queue.Queue -> run_in_threadpool bridge, since the
+            # renderer produces chapters on its own background thread.
+            while True:
+                chapter_audio = await run_in_threadpool(chapter_queue.get)
+                if chapter_audio is None:
+                    return
+                interactive_session.extend_transcript(chapter_audio.timings)
+                wav_bytes = _audio_to_wav_bytes(chapter_audio.sample_rate, chapter_audio.audio)
+                await _send(
+                    {
+                        "type": "chapter_ready",
+                        "chapter_index": chapter_audio.chapter_index,
+                        "title": chapter_audio.title,
+                        "sample_rate": chapter_audio.sample_rate,
+                        "data": base64.b64encode(wav_bytes).decode("ascii"),
+                        "spans": [
+                            {
+                                "span_id": t.span_id,
+                                "chapter_index": t.chapter_index,
+                                "paragraph_index": t.paragraph_index,
+                                "character": t.character,
+                                "kind": t.kind.name,
+                                "text": t.text,
+                                "start_ms": t.start_ms,
+                                "end_ms": t.end_ms,
+                            }
+                            for t in chapter_audio.timings
+                        ],
+                    }
+                )
+
+        drain_task = asyncio.create_task(_drain_chapters()) if chapter_queue is not None else None
 
         try:
             while True:
@@ -711,7 +855,11 @@ def create_app(
                 if msg_type == "position":
                     event = interactive_session.advance_position(message["span_id"])
                     if event is not None:
-                        await websocket.send_json({"type": event.kind, "text": event.text, "sources": event.sources})
+                        await _send({"type": event.kind, "text": event.text, "sources": event.sources})
+
+                elif msg_type == "chapter_consumed":
+                    if renderer is not None:
+                        renderer.mark_consumed(int(message["chapter_index"]))
 
                 elif msg_type in ("chat", "choice"):
                     text = message.get("text", "")
@@ -735,13 +883,17 @@ def create_app(
                         for audio in pending_audio:
                             await _send_audio(audio)
 
-                    await websocket.send_json({"type": "answer", "text": event.text, "sources": event.sources})
+                    await _send({"type": "answer", "text": event.text, "sources": event.sources})
 
                 else:
-                    await websocket.send_json({"type": "error", "detail": f"Unknown message type: {msg_type!r}"})
+                    await _send({"type": "error", "detail": f"Unknown message type: {msg_type!r}"})
         except WebSocketDisconnect:
             pass
         finally:
+            if drain_task is not None:
+                drain_task.cancel()
+            if renderer is not None:
+                renderer.stop()
             sessions.pop(session_id, None)
 
     @app.get("/api/book/transcript", dependencies=[Depends(_verify_request)])

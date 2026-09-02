@@ -675,6 +675,9 @@ def test_session_ask_endpoint_returns_grounded_answer(tmp_path: Path) -> None:
 class _FakeSynthAgent:
     sample_rate = 8000
 
+    def use_voice_state(self, voice, state) -> None:
+        pass
+
     def synthesize(self, text: str):
         import numpy as np
 
@@ -850,3 +853,104 @@ def test_session_ws_chat_sends_text_only_when_not_spoken(tmp_path: Path) -> None
 
     assert message["type"] == "answer"
     assert message["text"] == "Text only answer."
+
+
+# --- /api/session/start_live, live chapter streaming over the ws -----------
+
+
+def _fake_build_render_pipeline(cast_file):
+    return _FakeSynthAgent(), {"Narrator": ("alba", object())}
+
+
+def test_session_start_live_returns_session_id_and_spoken_true(tmp_path: Path) -> None:
+    client = _client(
+        ingest_book=lambda path: _fixture_book(),
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=_fake_chat_stream,
+        build_render_pipeline_fn=_fake_build_render_pipeline,
+    )
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
+
+    response = client.post(
+        "/api/session/start_live",
+        headers=_headers(),
+        json={"book": "unused.epub", "cast": str(cast_path)},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["spoken"] is True
+    assert body["book_title"] == "Fixture"
+
+
+def test_session_start_live_rejects_when_narrator_pipeline_fails(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
+
+    def _raise(cast_file):
+        raise RuntimeError("no pocket-tts model available")
+
+    client = _client(ingest_book=lambda path: _fixture_book(), build_render_pipeline_fn=_raise)
+    response = client.post(
+        "/api/session/start_live", headers=_headers(), json={"book": "unused.epub", "cast": str(cast_path)}
+    )
+    assert response.status_code == 400
+
+
+def test_session_ws_live_streams_chapters_as_they_render(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
+
+    client = _client(
+        ingest_book=lambda path: _fixture_book(),  # 2 chapters, see _fixture_book()
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=_fake_chat_stream,
+        build_render_pipeline_fn=_fake_build_render_pipeline,
+    )
+    start = client.post(
+        "/api/session/start_live",
+        headers=_headers(),
+        json={"book": "unused.epub", "cast": str(cast_path), "lookahead_chapters": 5},
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        first = ws.receive_json()
+        second = ws.receive_json()
+
+    assert first["type"] == "chapter_ready"
+    assert second["type"] == "chapter_ready"
+    assert {first["chapter_index"], second["chapter_index"]} == {0, 1}
+    assert first["spans"]  # at least one span with real text/timings
+    assert "text" in first["spans"][0] and "start_ms" in first["spans"][0]
+
+    wav_bytes = base64.b64decode(first["data"])
+    with wave.open(io.BytesIO(wav_bytes)) as handle:
+        assert handle.getnframes() > 0
+
+
+def test_session_ws_live_chapter_consumed_advances_lookahead(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
+
+    client = _client(
+        ingest_book=lambda path: _fixture_book(),
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=_fake_chat_stream,
+        build_render_pipeline_fn=_fake_build_render_pipeline,
+    )
+    start = client.post(
+        "/api/session/start_live",
+        headers=_headers(),
+        json={"book": "unused.epub", "cast": str(cast_path), "lookahead_chapters": 0},
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        first = ws.receive_json()
+        assert first["chapter_index"] == 0
+
+        ws.send_json({"type": "chapter_consumed", "chapter_index": 0})
+        second = ws.receive_json()
+        assert second["chapter_index"] == 1

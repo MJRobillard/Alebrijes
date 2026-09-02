@@ -163,6 +163,27 @@ def synthesize_chapter(
     return np.concatenate(rendered), timings
 
 
+def build_render_agent(cast_file: CastFile, model: object | None = None) -> tuple[TTSAgent, dict[str, tuple[str, object]]]:
+    """Loads (or reuses) a pocket-tts model and resolves every cast voice
+    once, returning a `TTSAgent` primed with the Narrator's voice plus the
+    full `voice_states` map `synthesize_chapter` needs to swap voices per
+    line. Shared by `render_book` and by a live interactive session
+    (`server.py`), which both need this same setup before synthesizing.
+    """
+    if model is None:
+        from pocket_tts import TTSModel
+
+        try:
+            model = TTSModel.load_model()
+        except AttributeError:
+            model = TTSModel()
+
+    voice_states = resolve_voice_states(cast_file, model)
+    narrator_prompt, narrator_state = voice_states[NARRATOR]
+    agent = TTSAgent(voice=narrator_prompt, model=model, voice_state=narrator_state)
+    return agent, voice_states
+
+
 def render_book(
     book: Book,
     cast_file: CastFile,
@@ -193,17 +214,7 @@ def render_book(
     # full multi-chapter render takes.
     find_ffmpeg()
 
-    if model is None:
-        from pocket_tts import TTSModel
-
-        try:
-            model = TTSModel.load_model()
-        except AttributeError:
-            model = TTSModel()
-
-    voice_states = resolve_voice_states(cast_file, model)
-    narrator_prompt, narrator_state = voice_states[NARRATOR]
-    agent = TTSAgent(voice=narrator_prompt, model=model, voice_state=narrator_state)
+    agent, voice_states = build_render_agent(cast_file, model)
 
     staging_dir = Path(tempfile.mkdtemp(prefix="alebrijes_render_"))
     try:
