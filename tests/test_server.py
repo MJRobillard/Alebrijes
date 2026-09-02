@@ -560,3 +560,107 @@ def test_listen_route_is_unauthenticated_static_shell() -> None:
     response = client.get("/listen")
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
+
+
+# --- /api/rag/build ---------------------------------------------------------
+
+
+def _fixture_transcript_for_rag() -> Transcript:
+    return Transcript(
+        book_title="Fixture",
+        chapters=[],
+        spans=[
+            SpanTiming(
+                span_id=f"0.{i}.0",
+                chapter_index=0,
+                paragraph_index=i,
+                character="Narrator",
+                kind=SpanKind.NARRATION,
+                text=f"Span number {i}.",
+                start_ms=i * 1000,
+                end_ms=(i + 1) * 1000,
+            )
+            for i in range(3)
+        ],
+    )
+
+
+def _fake_embed_fn(text: str):
+    import numpy as np
+
+    return np.array([float(len(text)), 1.0], dtype=np.float32)
+
+
+def test_rag_build_endpoint_starts_job_and_writes_index(tmp_path: Path) -> None:
+    transcript_path = tmp_path / "book.transcript.json"
+    save_transcript(_fixture_transcript_for_rag(), transcript_path)
+
+    client = _client(embed_fn=_fake_embed_fn)
+    start = client.post(
+        "/api/rag/build", headers=_headers(), json={"transcript": str(transcript_path)}
+    )
+    assert start.status_code == 200
+    job_id = start.json()["job_id"]
+
+    deadline = time.time() + 5
+    status = None
+    while time.time() < deadline:
+        status = client.get(f"/api/rag/build/{job_id}", headers=_headers()).json()
+        if status["status"] != "running":
+            break
+        time.sleep(0.02)
+
+    assert status["status"] == "done"
+    assert status["spans_done"] == 3
+    assert status["spans_total"] == 3
+    assert Path(status["output_prefix"] + ".rag.npz").exists()
+    assert Path(status["output_prefix"] + ".rag.json").exists()
+
+
+def test_rag_build_status_for_unknown_job_id_is_404() -> None:
+    client = _client()
+    response = client.get("/api/rag/build/does-not-exist", headers=_headers())
+    assert response.status_code == 404
+
+
+# --- /api/session/ask --------------------------------------------------------
+
+
+def _fake_chat_stream(messages, *, model="hermes3:8b"):
+    # Echo the last user message content back, split into a couple of
+    # "streamed" chunks, so tests can assert on assembled output without
+    # a real Ollama server.
+    last_user = next(m["content"] for m in reversed(messages) if m["role"] == "user")
+    yield "Answer: "
+    yield last_user
+
+
+def test_session_ask_endpoint_returns_grounded_answer(tmp_path: Path) -> None:
+    from alebrijes.rag import RagIndex, save as save_rag
+    from alebrijes.rag.build import build_rag_index
+
+    transcript = _fixture_transcript_for_rag()
+    index = build_rag_index(transcript, _fake_embed_fn)
+    npz_path = tmp_path / "book.rag.npz"
+    json_path = tmp_path / "book.rag.json"
+    save_rag(index, npz_path, json_path)
+
+    client = _client(embed_fn=_fake_embed_fn, chat_stream_fn=_fake_chat_stream)
+    response = client.post(
+        "/api/session/ask",
+        headers=_headers(),
+        json={
+            "book_title": "Fixture",
+            "position_summary": "partway through",
+            "rag_npz": str(npz_path),
+            "rag_json": str(json_path),
+            "current_seq": 1,
+            "question": "what's happening?",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer"] == "Answer: what's happening?"
+    # Position-bounded: only spans with seq <= 1 may be cited as sources.
+    assert all(sid.split(".")[1] in ("0", "1") for sid in body["sources"])

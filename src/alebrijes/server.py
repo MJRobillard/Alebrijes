@@ -33,7 +33,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Iterator, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -46,6 +46,9 @@ from alebrijes.ingest import Book
 from alebrijes.preview import synthesize_preview as default_synthesize_preview
 from alebrijes.render import render_book as default_render_book
 from alebrijes.transcript import load as load_transcript
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 def find_free_port(host: str = "127.0.0.1") -> int:
@@ -155,9 +158,51 @@ class _RenderJob:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
+class RagBuildRequest(BaseModel):
+    transcript: str
+    out_prefix: Optional[str] = None
+
+
+class RagBuildJobStatus(BaseModel):
+    job_id: str
+    status: str  # "running" | "done" | "error"
+    spans_done: int = 0
+    spans_total: int = 0
+    output_prefix: Optional[str] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class _RagBuildJob:
+    status: str = "running"
+    spans_done: int = 0
+    spans_total: int = 0
+    output_prefix: Optional[str] = None
+    error: Optional[str] = None
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+
+class SessionAskRequest(BaseModel):
+    book_title: str
+    character_voice: str = "Narrator"
+    position_summary: str
+    rag_npz: str
+    rag_json: str
+    current_seq: int
+    question: str
+    top_k: int = 5
+
+
+class SessionAskResponse(BaseModel):
+    answer: str
+    sources: list[str] = []
+
+
 IngestFn = Callable[[Path], Book]
 RenderFn = Callable[..., Path]
 SynthesizePreviewFn = Callable[[str, str], bytes]
+EmbedFn = Callable[[str], "np.ndarray"]
+ChatStreamFn = Callable[..., Iterator[str]]
 ImportVoiceFn = Callable[[Path, str, Path], Path]
 
 
@@ -227,11 +272,22 @@ def create_app(
     synthesize_preview_fn: SynthesizePreviewFn = default_synthesize_preview,
     import_voice_fn: ImportVoiceFn = _default_import_voice,
     voices_dir: Optional[Path] = None,
+    embed_fn: Optional[EmbedFn] = None,
+    chat_stream_fn: Optional[ChatStreamFn] = None,
 ) -> FastAPI:
     if voices_dir is None:
         voices_dir = Config().voices_dir
+    if embed_fn is None:
+        from alebrijes.llm.ollama import OllamaClient
+
+        embed_fn = OllamaClient().embed
+    if chat_stream_fn is None:
+        from alebrijes.llm.ollama import OllamaClient
+
+        chat_stream_fn = OllamaClient().chat_stream
     app = FastAPI(title="alebrijes")
     jobs: dict[str, _RenderJob] = {}
+    rag_jobs: dict[str, _RagBuildJob] = {}
 
     def _verify_request(request: Request) -> None:
         supplied = request.headers.get("x-alebrijes-token")
@@ -426,6 +482,102 @@ def create_app(
                 output_path=job.output_path,
                 error=job.error,
             )
+
+    def _run_rag_build_job(job_id: str, transcript_path: Path, out_prefix: str) -> None:
+        from alebrijes.rag import save as save_rag
+        from alebrijes.rag.build import build_rag_index
+
+        job = rag_jobs[job_id]
+
+        def _on_progress(done: int, total: int) -> None:
+            with job.lock:
+                job.spans_done = done
+                job.spans_total = total
+
+        try:
+            transcript = load_transcript(transcript_path)
+            index = build_rag_index(transcript, embed_fn, on_progress=_on_progress)
+            npz_path = Path(f"{out_prefix}.rag.npz")
+            json_path = Path(f"{out_prefix}.rag.json")
+            save_rag(index, npz_path, json_path)
+            with job.lock:
+                job.status = "done"
+                job.output_prefix = out_prefix
+        except Exception as exc:  # noqa: BLE001 - reported to the client, not swallowed
+            with job.lock:
+                job.status = "error"
+                job.error = str(exc)
+
+    @app.post("/api/rag/build", response_model=RagBuildJobStatus, dependencies=[Depends(_verify_request)])
+    def rag_build(payload: RagBuildRequest) -> RagBuildJobStatus:
+        transcript_path = Path(payload.transcript)
+        if not transcript_path.exists():
+            raise HTTPException(status_code=400, detail=f"Transcript not found: {transcript_path}")
+
+        if payload.out_prefix:
+            out_prefix = payload.out_prefix
+        else:
+            name = transcript_path.name
+            stem = name[: -len(".transcript.json")] if name.endswith(".transcript.json") else transcript_path.stem
+            out_prefix = str(transcript_path.parent / stem)
+
+        job_id = uuid.uuid4().hex
+        rag_jobs[job_id] = _RagBuildJob()
+
+        thread = threading.Thread(
+            target=_run_rag_build_job, args=(job_id, transcript_path, out_prefix), daemon=True
+        )
+        thread.start()
+
+        return RagBuildJobStatus(job_id=job_id, status="running")
+
+    @app.get(
+        "/api/rag/build/{job_id}", response_model=RagBuildJobStatus, dependencies=[Depends(_verify_request)]
+    )
+    def rag_build_status(job_id: str) -> RagBuildJobStatus:
+        job = rag_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Unknown job id")
+        with job.lock:
+            return RagBuildJobStatus(
+                job_id=job_id,
+                status=job.status,
+                spans_done=job.spans_done,
+                spans_total=job.spans_total,
+                output_prefix=job.output_prefix,
+                error=job.error,
+            )
+
+    @app.post("/api/session/ask", response_model=SessionAskResponse, dependencies=[Depends(_verify_request)])
+    def session_ask(payload: SessionAskRequest) -> SessionAskResponse:
+        from alebrijes.llm.prompts import Mode, build_messages
+        from alebrijes.rag import load as load_rag, search as search_rag
+
+        npz_path = Path(payload.rag_npz)
+        json_path = Path(payload.rag_json)
+        if not npz_path.exists() or not json_path.exists():
+            raise HTTPException(status_code=400, detail="RAG index not found — run `alebrijes rag build` first.")
+
+        index = load_rag(npz_path, json_path)
+        query_vector = embed_fn(payload.question)
+        hits = search_rag(index, query_vector, max_seq=payload.current_seq, top_k=payload.top_k)
+
+        messages = build_messages(
+            mode=Mode.QA,
+            book_title=payload.book_title,
+            character_voice=payload.character_voice,
+            position_summary=payload.position_summary,
+            rag_excerpts=[hit.entry.text for hit in hits],
+            history=[],
+            user_message=payload.question,
+        )
+
+        try:
+            answer = "".join(chat_stream_fn(messages))
+        except Exception as exc:  # noqa: BLE001 - reported to the client, not swallowed
+            raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}") from exc
+
+        return SessionAskResponse(answer=answer, sources=[hit.entry.span_id for hit in hits])
 
     @app.get("/api/book/transcript", dependencies=[Depends(_verify_request)])
     def book_transcript(path: str) -> Response:

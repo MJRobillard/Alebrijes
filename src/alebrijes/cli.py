@@ -130,6 +130,44 @@ def _cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_rag(args: argparse.Namespace) -> int:
+    if args.rag_command == "build":
+        return _cmd_rag_build(args)
+    raise NotImplementedError(f"`alebrijes rag {args.rag_command}` is not implemented.")
+
+
+def _cmd_rag_build(args: argparse.Namespace) -> int:
+    from alebrijes.llm.ollama import OllamaClient
+    from alebrijes.rag import save as save_rag
+    from alebrijes.rag.build import build_rag_index
+    from alebrijes.transcript import load as load_transcript
+
+    transcript_path = Path(args.transcript)
+    transcript = load_transcript(transcript_path)
+
+    if args.out_prefix:
+        out_prefix = args.out_prefix
+    else:
+        name = transcript_path.name
+        stem = name[: -len(".transcript.json")] if name.endswith(".transcript.json") else transcript_path.stem
+        out_prefix = str(transcript_path.parent / stem)
+
+    def on_progress(done: int, total: int) -> None:
+        print(f"Embedding span {done}/{total}", end="\r")
+
+    client = OllamaClient()
+    index = build_rag_index(transcript, client.embed, on_progress=on_progress)
+    print()
+
+    npz_path = Path(f"{out_prefix}.rag.npz")
+    json_path = Path(f"{out_prefix}.rag.json")
+    save_rag(index, npz_path, json_path)
+
+    print(f"Wrote RAG index: {npz_path}, {json_path}")
+    print(f"Spans indexed: {len(index.entries)}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="alebrijes", description="Local, multi-voice book-to-audiobook engine.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -166,6 +204,20 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("--out", help="Where to write the audiobook (default: <book>.m4b).")
     render.add_argument("--pause-ms", type=int, default=250, help="Silence between lines, in milliseconds.")
     render.set_defaults(func=_cmd_render)
+
+    rag = subparsers.add_parser("rag", help="Build a RAG index for interactive narration.")
+    rag.set_defaults(func=_cmd_rag)
+    rag_subparsers = rag.add_subparsers(dest="rag_command", required=True)
+
+    rag_build = rag_subparsers.add_parser("build", help="Embed a book's transcript into a searchable RAG index.")
+    rag_build.add_argument(
+        "--transcript", required=True, help="Path to the <book>.transcript.json produced by `alebrijes render`."
+    )
+    rag_build.add_argument(
+        "--out-prefix",
+        help="Prefix for the output <prefix>.rag.npz/.rag.json (default: derived from --transcript).",
+    )
+    rag_build.set_defaults(func=_cmd_rag_build)
 
     return parser
 

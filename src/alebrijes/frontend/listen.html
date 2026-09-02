@@ -71,6 +71,15 @@
   }
   .status { font-size: 0.88rem; color: var(--ink-soft); }
   .status.error { color: var(--danger); }
+  .hint { font-size: 0.85rem; color: var(--ink-soft); margin: 0 0 0.9rem; line-height: 1.5; }
+  input[type=text] {
+    font: inherit;
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--ink);
+  }
   audio { width: 100%; margin-top: 0.75rem; }
   #transcript {
     margin-top: 1rem;
@@ -130,6 +139,23 @@
     <h2 id="book-title">Now Playing</h2>
     <audio id="player" controls preload="auto"></audio>
     <div id="transcript"></div>
+  </section>
+
+  <section id="ask-section" disabled>
+    <h2>Ask the Narrator</h2>
+    <p class="hint">
+      Answers are grounded only in what's been narrated up to your current playback
+      position — nothing from later in the book.
+    </p>
+    <div class="row" id="rag-build-row">
+      <button id="build-rag-btn">Build Knowledge Index</button>
+      <span id="rag-status" class="status"></span>
+    </div>
+    <div class="row" id="ask-row" hidden style="margin-top: 0.75rem;">
+      <input type="text" id="question-input" placeholder="Who is that character again?" style="flex: 1;">
+      <button id="ask-btn">Ask</button>
+    </div>
+    <div id="answer" style="margin-top: 0.75rem; white-space: pre-wrap;"></div>
   </section>
 </main>
 
@@ -206,10 +232,111 @@
       player.src = URL.createObjectURL(audioBlob);
       playerSection.removeAttribute("disabled");
       setStatus("");
+      resetAskSection();
     }).catch(function (err) {
       setStatus(err.message || String(err), true);
     });
   }
+
+  // Transcript/RAG sidecar paths follow the same convention as render_book's
+  // defaults: <m4b path with its extension replaced>.
+  function withExtension(path, ext) {
+    const dot = path.lastIndexOf(".");
+    return (dot === -1 ? path : path.slice(0, dot)) + ext;
+  }
+
+  function ragUrls(path) {
+    return { npz: withExtension(path, ".rag.npz"), json: withExtension(path, ".rag.json") };
+  }
+
+  const askSection = document.getElementById("ask-section");
+  const ragStatusEl = document.getElementById("rag-status");
+  const buildRagBtn = document.getElementById("build-rag-btn");
+  const askRow = document.getElementById("ask-row");
+  const questionInput = document.getElementById("question-input");
+  const askBtn = document.getElementById("ask-btn");
+  const answerEl = document.getElementById("answer");
+
+  function resetAskSection() {
+    askSection.removeAttribute("disabled");
+    askRow.hidden = true;
+    buildRagBtn.hidden = false;
+    ragStatusEl.textContent = "";
+    answerEl.textContent = "";
+  }
+
+  buildRagBtn.addEventListener("click", function () {
+    if (!state.audioPath || !state.transcript) return;
+    buildRagBtn.disabled = true;
+    ragStatusEl.textContent = "Building knowledge index…";
+
+    const transcriptPath = withExtension(state.audioPath, ".transcript.json");
+    apiFetch("/api/rag/build", {
+      method: "POST",
+      body: JSON.stringify({ transcript: transcriptPath }),
+    }).then(function (r) { return r.json(); }).then(function (job) {
+      pollRagBuild(job.job_id);
+    }).catch(function (err) {
+      ragStatusEl.textContent = err.message || String(err);
+      buildRagBtn.disabled = false;
+    });
+  });
+
+  function pollRagBuild(jobId) {
+    apiFetch("/api/rag/build/" + jobId).then(function (r) { return r.json(); }).then(function (status) {
+      if (status.status === "running") {
+        ragStatusEl.textContent = "Embedding " + status.spans_done + "/" + status.spans_total + "…";
+        setTimeout(function () { pollRagBuild(jobId); }, 300);
+        return;
+      }
+      if (status.status === "error") {
+        ragStatusEl.textContent = "Failed: " + status.error;
+        buildRagBtn.disabled = false;
+        return;
+      }
+      ragStatusEl.textContent = "Knowledge index ready.";
+      buildRagBtn.hidden = true;
+      askRow.hidden = false;
+    });
+  }
+
+  function currentSeq() {
+    if (!state.transcript || !state.currentSpanId) return 0;
+    const index = state.transcript.spans.findIndex(function (s) { return s.span_id === state.currentSpanId; });
+    return index === -1 ? 0 : index;
+  }
+
+  function positionSummary() {
+    const seq = currentSeq();
+    const span = state.transcript.spans[seq];
+    return span ? ("chapter " + (span.chapter_index + 1) + ", near: “" + span.text.slice(0, 60) + "”") : "the start";
+  }
+
+  askBtn.addEventListener("click", function () {
+    const question = questionInput.value.trim();
+    if (!question || !state.audioPath) return;
+    askBtn.disabled = true;
+    answerEl.textContent = "…";
+
+    const urls = ragUrls(state.audioPath);
+    apiFetch("/api/session/ask", {
+      method: "POST",
+      body: JSON.stringify({
+        book_title: state.transcript.book_title,
+        position_summary: positionSummary(),
+        rag_npz: urls.npz,
+        rag_json: urls.json,
+        current_seq: currentSeq(),
+        question: question,
+      }),
+    }).then(function (r) { return r.json(); }).then(function (result) {
+      answerEl.textContent = result.answer;
+    }).catch(function (err) {
+      answerEl.textContent = "Error: " + (err.message || String(err));
+    }).finally(function () {
+      askBtn.disabled = false;
+    });
+  });
 
   function renderTranscript(transcript) {
     const frag = document.createDocumentFragment();

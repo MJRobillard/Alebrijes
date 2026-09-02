@@ -21,13 +21,13 @@ dependencies = [
   "pywebview",
   "imageio-ffmpeg",  # bundles a real static ffmpeg binary -- no system install needed
   "safetensors",  # imported voice states may be .safetensors, not just torch-pickle .pt
+  "httpx",  # talks to a local Ollama server for interactive narration (llm/ollama.py); also required by fastapi.testclient.TestClient
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest",
   "reportlab",  # generates tiny real PDFs for ingest.pdf tests only
-  "httpx",  # required by fastapi.testclient.TestClient
 ]
 build = [
   "pyinstaller",  # only needed to produce the packaged desktop app (Phase 4)
@@ -49,4 +49,4 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-alebrijes = ["frontend/*.html"]
+alebrijes = ["frontend/*.html", "llm/*.md"]
