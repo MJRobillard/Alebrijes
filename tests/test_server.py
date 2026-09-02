@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import io
 import time
+import wave
 from pathlib import Path
 
 import pytest
@@ -664,3 +667,186 @@ def test_session_ask_endpoint_returns_grounded_answer(tmp_path: Path) -> None:
     assert body["answer"] == "Answer: what's happening?"
     # Position-bounded: only spans with seq <= 1 may be cited as sources.
     assert all(sid.split(".")[1] in ("0", "1") for sid in body["sources"])
+
+
+# --- /api/session/start, /api/session/{id}/ws --------------------------------
+
+
+class _FakeSynthAgent:
+    sample_rate = 8000
+
+    def synthesize(self, text: str):
+        import numpy as np
+
+        return np.ones(100, dtype=np.int16)
+
+
+def _setup_session_fixture(tmp_path: Path):
+    transcript = _fixture_transcript_for_rag()
+    m4b_path = tmp_path / "book.m4b"
+    save_transcript(transcript, m4b_path.with_suffix(".transcript.json"))
+
+    from alebrijes.rag.build import build_rag_index
+    from alebrijes.rag import save as save_rag
+
+    index = build_rag_index(transcript, _fake_embed_fn)
+    save_rag(index, m4b_path.with_suffix(".rag.npz"), m4b_path.with_suffix(".rag.json"))
+
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
+
+    return m4b_path, cast_path
+
+
+def test_session_start_requires_existing_transcript_and_rag_index(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture", entries=[]), cast_path)
+
+    client = _client()
+    response = client.post(
+        "/api/session/start",
+        headers=_headers(),
+        json={"m4b": str(tmp_path / "missing.m4b"), "cast": str(cast_path)},
+    )
+    assert response.status_code == 400
+
+
+def test_session_start_reports_spoken_true_when_narrator_agent_builds(tmp_path: Path) -> None:
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+
+    client = _client(
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=_fake_chat_stream,
+        build_narrator_agent_fn=lambda cast_file: _FakeSynthAgent(),
+    )
+    response = client.post(
+        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["spoken"] is True
+    assert body["session_id"]
+
+
+def test_session_start_reports_spoken_false_when_agent_build_fails(tmp_path: Path) -> None:
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+
+    def _raise(cast_file):
+        raise RuntimeError("no GPU/model available")
+
+    client = _client(embed_fn=_fake_embed_fn, chat_stream_fn=_fake_chat_stream, build_narrator_agent_fn=_raise)
+    response = client.post(
+        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["spoken"] is False
+
+
+def test_session_ws_unknown_session_id_closes() -> None:
+    client = _client()
+    with pytest.raises(Exception):
+        with client.websocket_connect(f"/api/session/does-not-exist/ws?token={TOKEN}"):
+            pass
+
+
+def test_session_ws_rejects_missing_or_wrong_token(tmp_path: Path) -> None:
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+    client = _client(
+        embed_fn=_fake_embed_fn, chat_stream_fn=_fake_chat_stream, build_narrator_agent_fn=lambda c: _FakeSynthAgent()
+    )
+    start = client.post(
+        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+    )
+    session_id = start.json()["session_id"]
+
+    with pytest.raises(Exception):
+        with client.websocket_connect(f"/api/session/{session_id}/ws?token=wrong-token"):
+            pass
+
+
+def test_session_ws_position_message_triggers_awaiting_input_for_checkpoint(tmp_path: Path) -> None:
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        yield "What do you think happens next?"
+
+    def _no_agent(cast_file):
+        raise RuntimeError("no model in this test")
+
+    client = _client(embed_fn=_fake_embed_fn, chat_stream_fn=chat_stream_fn, build_narrator_agent_fn=_no_agent)
+    start = client.post(
+        "/api/session/start",
+        headers=_headers(),
+        json={"m4b": str(m4b_path), "cast": str(cast_path), "mode": "checkpoint", "checkpoints": ["0.1.0"]},
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.send_json({"type": "position", "span_id": "0.0.0"})
+        # Not a checkpoint -- nothing should arrive for this one; prove it by
+        # immediately following with the real checkpoint and checking that's
+        # the very first message received.
+        ws.send_json({"type": "position", "span_id": "0.1.0"})
+        message = ws.receive_json()
+
+    assert message["type"] == "awaiting_input"
+    assert message["text"] == "What do you think happens next?"
+
+
+def test_session_ws_chat_returns_answer_and_streams_audio_when_spoken(tmp_path: Path) -> None:
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        yield "Hi there. "
+        yield "Nice to meet you."
+
+    client = _client(
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=chat_stream_fn,
+        build_narrator_agent_fn=lambda cast_file: _FakeSynthAgent(),
+    )
+    start = client.post(
+        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.send_json({"type": "chat", "text": "hello"})
+        messages = [ws.receive_json(), ws.receive_json(), ws.receive_json()]
+
+    audio_messages = [m for m in messages if m["type"] == "audio_chunk"]
+    answer_messages = [m for m in messages if m["type"] == "answer"]
+    assert len(audio_messages) == 2  # one per sentence
+    assert len(answer_messages) == 1
+    assert answer_messages[0]["text"] == "Hi there. Nice to meet you."
+
+    # Each audio chunk must be a self-contained, decodable WAV file.
+    for chunk in audio_messages:
+        wav_bytes = base64.b64decode(chunk["data"])
+        with wave.open(io.BytesIO(wav_bytes)) as handle:
+            assert handle.getnframes() > 0
+
+
+def test_session_ws_chat_sends_text_only_when_not_spoken(tmp_path: Path) -> None:
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        yield "Text only answer."
+
+    def _raise(cast_file):
+        raise RuntimeError("no model")
+
+    client = _client(embed_fn=_fake_embed_fn, chat_stream_fn=chat_stream_fn, build_narrator_agent_fn=_raise)
+    start = client.post(
+        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.send_json({"type": "chat", "text": "hello"})
+        message = ws.receive_json()
+
+    assert message["type"] == "answer"
+    assert message["text"] == "Text only answer."

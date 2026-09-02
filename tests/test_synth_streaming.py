@@ -2,7 +2,23 @@ from __future__ import annotations
 
 import numpy as np
 
-from alebrijes.synth.streaming import stream_response
+from alebrijes.synth.streaming import SentenceChunker, stream_response
+
+
+def test_sentence_chunker_returns_completed_sentences_across_feed_calls() -> None:
+    chunker = SentenceChunker()
+
+    assert chunker.feed("Let me think") == []
+    assert chunker.feed(". Colin met Sable.") == ["Let me think.", "Colin met Sable."]
+    assert chunker.feed(" She warned him") == []
+    assert chunker.flush() == "She warned him"
+
+
+def test_sentence_chunker_flush_on_no_trailing_text_returns_none() -> None:
+    chunker = SentenceChunker()
+    chunker.feed("Complete sentence.")
+
+    assert chunker.flush() is None
 
 
 class _RecordingAgent:

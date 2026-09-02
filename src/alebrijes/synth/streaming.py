@@ -12,7 +12,7 @@ finished generating.
 from __future__ import annotations
 
 import re
-from typing import Iterator, Protocol
+from typing import Iterator, Optional, Protocol
 
 import numpy as np
 
@@ -23,23 +23,51 @@ class SynthesizesText(Protocol):
     def synthesize(self, text: str) -> np.ndarray: ...
 
 
+class SentenceChunker:
+    """Incremental sentence splitter: feed it text deltas as they arrive,
+    get back each newly-completed sentence.
+
+    The pull-based `stream_response` below is built on this; a caller that
+    needs to react to each delta as it's produced (e.g. server.py's chat
+    handler, which synthesizes progressively while still consuming a
+    single LLM stream) can drive the same buffering logic directly instead.
+    """
+
+    def __init__(self) -> None:
+        self._buffer = ""
+
+    def feed(self, delta: str) -> list[str]:
+        self._buffer += delta
+        sentences: list[str] = []
+        while True:
+            match = _SENTENCE_BOUNDARY_RE.search(self._buffer)
+            if not match:
+                break
+            sentence = self._buffer[: match.end()].strip()
+            self._buffer = self._buffer[match.end() :]
+            if sentence:
+                sentences.append(sentence)
+        return sentences
+
+    def flush(self) -> Optional[str]:
+        """Call once the source is exhausted to get any trailing text that
+        never reached a sentence boundary (e.g. a response with no closing
+        punctuation)."""
+        tail = self._buffer.strip()
+        self._buffer = ""
+        return tail or None
+
+
 def stream_response(text_chunks: Iterator[str], agent: SynthesizesText) -> Iterator[np.ndarray]:
     """Yields one audio array per sentence as `text_chunks` (LLM token/content
     deltas) are consumed, synthesizing each sentence the moment its boundary
     appears rather than after the whole iterator is exhausted.
     """
-    buffer = ""
+    chunker = SentenceChunker()
     for delta in text_chunks:
-        buffer += delta
-        while True:
-            match = _SENTENCE_BOUNDARY_RE.search(buffer)
-            if not match:
-                break
-            sentence = buffer[: match.end()].strip()
-            buffer = buffer[match.end() :]
-            if sentence:
-                yield agent.synthesize(sentence)
+        for sentence in chunker.feed(delta):
+            yield agent.synthesize(sentence)
 
-    tail = buffer.strip()
+    tail = chunker.flush()
     if tail:
         yield agent.synthesize(tail)

@@ -26,6 +26,8 @@ future refinement, not built in this pass.
 
 from __future__ import annotations
 
+import base64
+import io
 import secrets
 import socket
 import threading
@@ -35,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterator, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
@@ -44,11 +46,44 @@ from alebrijes.cast.build import LOW_CONFIDENCE_THRESHOLD, build_cast_file
 from alebrijes.config import BUILTIN_VOICES, Config
 from alebrijes.ingest import Book
 from alebrijes.preview import synthesize_preview as default_synthesize_preview
-from alebrijes.render import render_book as default_render_book
+from alebrijes.render import NARRATOR, render_book as default_render_book
+from alebrijes.session import InteractiveSession, SessionMode
+from alebrijes.synth.streaming import SentenceChunker
 from alebrijes.transcript import load as load_transcript
 
 if TYPE_CHECKING:
     import numpy as np
+
+
+def _default_build_narrator_agent(cast_file: CastFile) -> object:
+    """Builds a `TTSAgent` bound to the book's cast Narrator voice, for
+    synthesizing spoken interactive-narration responses in the same voice
+    as the rest of the audiobook. Loads the real pocket-tts model, so this
+    is slow/heavy by design — callers should treat failure (no model
+    available, wrong environment, etc.) as "spoken responses aren't
+    available this session", not fatal; see `session_start`'s try/except.
+    """
+    from alebrijes.render import _load_voice_state
+    from alebrijes.synth.agent import TTSAgent
+    from pocket_tts import TTSModel
+
+    try:
+        model = TTSModel.load_model()
+    except AttributeError:
+        model = TTSModel()
+
+    voice_key = cast_file.voice_for(NARRATOR)
+    voice_path = Path(voice_key)
+    state = _load_voice_state(voice_path) if voice_path.exists() else model.get_state_for_audio_prompt(voice_key)
+    return TTSAgent(voice=voice_key, model=model, voice_state=state)
+
+
+def _audio_to_wav_bytes(sample_rate: int, audio: "np.ndarray") -> bytes:
+    from alebrijes.synth.agent import write_wav_array
+
+    buffer = io.BytesIO()
+    write_wav_array(buffer, sample_rate, audio)
+    return buffer.getvalue()
 
 
 def find_free_port(host: str = "127.0.0.1") -> int:
@@ -198,12 +233,26 @@ class SessionAskResponse(BaseModel):
     sources: list[str] = []
 
 
+class SessionStartRequest(BaseModel):
+    m4b: str
+    cast: str
+    mode: str = "qa"
+    checkpoints: list[str] = []
+
+
+class SessionStartResponse(BaseModel):
+    session_id: str
+    book_title: str
+    spoken: bool  # whether a narrator TTS agent was available for spoken responses
+
+
 IngestFn = Callable[[Path], Book]
 RenderFn = Callable[..., Path]
 SynthesizePreviewFn = Callable[[str, str], bytes]
 EmbedFn = Callable[[str], "np.ndarray"]
 ChatStreamFn = Callable[..., Iterator[str]]
 ImportVoiceFn = Callable[[Path, str, Path], Path]
+BuildNarratorAgentFn = Callable[[CastFile], object]
 
 
 def _load_voice_state_dict(source_path: Path) -> dict:
@@ -274,6 +323,7 @@ def create_app(
     voices_dir: Optional[Path] = None,
     embed_fn: Optional[EmbedFn] = None,
     chat_stream_fn: Optional[ChatStreamFn] = None,
+    build_narrator_agent_fn: BuildNarratorAgentFn = _default_build_narrator_agent,
 ) -> FastAPI:
     if voices_dir is None:
         voices_dir = Config().voices_dir
@@ -288,6 +338,7 @@ def create_app(
     app = FastAPI(title="alebrijes")
     jobs: dict[str, _RenderJob] = {}
     rag_jobs: dict[str, _RagBuildJob] = {}
+    sessions: dict[str, dict] = {}  # session_id -> {"session": InteractiveSession, "agent": object | None}
 
     def _verify_request(request: Request) -> None:
         supplied = request.headers.get("x-alebrijes-token")
@@ -578,6 +629,120 @@ def create_app(
             raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}") from exc
 
         return SessionAskResponse(answer=answer, sources=[hit.entry.span_id for hit in hits])
+
+    @app.post("/api/session/start", response_model=SessionStartResponse, dependencies=[Depends(_verify_request)])
+    def session_start(payload: SessionStartRequest) -> SessionStartResponse:
+        from alebrijes.rag import load as load_rag_index
+
+        m4b_path = Path(payload.m4b)
+        transcript_path = m4b_path.with_suffix(".transcript.json")
+        rag_npz_path = m4b_path.with_suffix(".rag.npz")
+        rag_json_path = m4b_path.with_suffix(".rag.json")
+        if not transcript_path.exists():
+            raise HTTPException(status_code=400, detail=f"No transcript found for {m4b_path}")
+        if not rag_npz_path.exists() or not rag_json_path.exists():
+            raise HTTPException(status_code=400, detail="RAG index not found — run `alebrijes rag build` first.")
+
+        try:
+            mode = SessionMode(payload.mode)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Unknown mode: {payload.mode!r}")
+
+        try:
+            cast_file = load_cast(Path(payload.cast))
+        except (FileNotFoundError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        transcript = load_transcript(transcript_path)
+        rag_index = load_rag_index(rag_npz_path, rag_json_path)
+
+        interactive_session = InteractiveSession(
+            book_title=transcript.book_title,
+            character_voice=NARRATOR,
+            transcript=transcript,
+            rag_index=rag_index,
+            embed_fn=embed_fn,
+            chat_stream_fn=chat_stream_fn,
+            mode=mode,
+            checkpoints=payload.checkpoints,
+        )
+
+        try:
+            agent = build_narrator_agent_fn(cast_file)
+        except Exception:  # noqa: BLE001 - spoken responses degrade to text-only, not fatal
+            agent = None
+
+        session_id = uuid.uuid4().hex
+        sessions[session_id] = {"session": interactive_session, "agent": agent}
+
+        return SessionStartResponse(session_id=session_id, book_title=transcript.book_title, spoken=agent is not None)
+
+    @app.websocket("/api/session/{session_id}/ws")
+    async def session_ws(websocket: WebSocket, session_id: str) -> None:
+        supplied = websocket.query_params.get("token")
+        if not supplied or not secrets.compare_digest(supplied, token):
+            await websocket.close(code=4403)
+            return
+        origin = websocket.headers.get("origin")
+        if origin is not None and origin != allowed_origin:
+            await websocket.close(code=4403)
+            return
+
+        entry = sessions.get(session_id)
+        if entry is None:
+            await websocket.close(code=4404)
+            return
+
+        await websocket.accept()
+        interactive_session: InteractiveSession = entry["session"]
+        agent = entry["agent"]
+
+        async def _send_audio(audio: "np.ndarray") -> None:
+            wav_bytes = _audio_to_wav_bytes(agent.sample_rate, audio)
+            await websocket.send_json(
+                {"type": "audio_chunk", "sample_rate": agent.sample_rate, "data": base64.b64encode(wav_bytes).decode("ascii")}
+            )
+
+        try:
+            while True:
+                message = await websocket.receive_json()
+                msg_type = message.get("type")
+
+                if msg_type == "position":
+                    event = interactive_session.advance_position(message["span_id"])
+                    if event is not None:
+                        await websocket.send_json({"type": event.kind, "text": event.text, "sources": event.sources})
+
+                elif msg_type in ("chat", "choice"):
+                    text = message.get("text", "")
+                    chunker = SentenceChunker()
+                    pending_audio: list["np.ndarray"] = []
+
+                    def _on_delta(delta: str) -> None:
+                        if agent is None:
+                            return
+                        for sentence in chunker.feed(delta):
+                            pending_audio.append(agent.synthesize(sentence))
+
+                    event = interactive_session.handle_user_message(
+                        text, on_delta=_on_delta if agent is not None else None
+                    )
+
+                    if agent is not None:
+                        tail = chunker.flush()
+                        if tail:
+                            pending_audio.append(agent.synthesize(tail))
+                        for audio in pending_audio:
+                            await _send_audio(audio)
+
+                    await websocket.send_json({"type": "answer", "text": event.text, "sources": event.sources})
+
+                else:
+                    await websocket.send_json({"type": "error", "detail": f"Unknown message type: {msg_type!r}"})
+        except WebSocketDisconnect:
+            pass
+        finally:
+            sessions.pop(session_id, None)
 
     @app.get("/api/book/transcript", dependencies=[Depends(_verify_request)])
     def book_transcript(path: str) -> Response:

@@ -81,6 +81,18 @@
     color: var(--ink);
   }
   audio { width: 100%; margin-top: 0.75rem; }
+  select {
+    font: inherit;
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--ink);
+  }
+  .chat-turn { padding: 0.5rem 0.7rem; border-radius: 6px; margin-bottom: 0.5rem; font-size: 0.92rem; white-space: pre-wrap; }
+  .chat-turn.user { background: var(--highlight-bg); }
+  .chat-turn.narrator { background: var(--bg); border: 1px solid var(--line); }
+  .chat-turn .role { display: block; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-soft); margin-bottom: 0.15rem; }
   #transcript {
     margin-top: 1rem;
     max-height: 55vh;
@@ -132,6 +144,10 @@
       <button id="choose-audio-btn">Choose Audiobook (.m4b)…</button>
       <span id="audio-path" class="path">No audiobook selected.</span>
     </div>
+    <div class="row" style="margin-top: 0.5rem;">
+      <button id="choose-cast-btn">Choose Cast File (.cast.yaml)…</button>
+      <span id="cast-path" class="path">No cast file selected.</span>
+    </div>
     <div id="load-status" class="status"></div>
   </section>
 
@@ -141,28 +157,40 @@
     <div id="transcript"></div>
   </section>
 
-  <section id="ask-section" disabled>
-    <h2>Ask the Narrator</h2>
+  <section id="session-section" disabled>
+    <h2>Interactive Session</h2>
     <p class="hint">
-      Answers are grounded only in what's been narrated up to your current playback
-      position — nothing from later in the book.
+      Ask questions, or use Checkpoint/Learning mode to have the narrator pause and
+      react. Answers are grounded only in what's been narrated up to your current
+      playback position — nothing from later in the book.
     </p>
     <div class="row" id="rag-build-row">
       <button id="build-rag-btn">Build Knowledge Index</button>
       <span id="rag-status" class="status"></span>
     </div>
-    <div class="row" id="ask-row" hidden style="margin-top: 0.75rem;">
-      <input type="text" id="question-input" placeholder="Who is that character again?" style="flex: 1;">
-      <button id="ask-btn">Ask</button>
+    <div class="row" id="session-start-row" hidden style="margin-top: 0.75rem;">
+      <select id="mode-select">
+        <option value="qa">Ask questions</option>
+        <option value="cyoa">Choose your own adventure</option>
+        <option value="checkpoint">Checkpoints (pause for my reaction)</option>
+        <option value="learning">Learning (comprehension questions)</option>
+      </select>
+      <button id="start-session-btn">Start Session</button>
+      <span id="session-status" class="status"></span>
     </div>
-    <div id="answer" style="margin-top: 0.75rem; white-space: pre-wrap;"></div>
+    <div id="chat-log" style="margin-top: 0.75rem; max-height: 30vh; overflow-y: auto;" hidden></div>
+    <div class="row" id="chat-row" hidden style="margin-top: 0.75rem;">
+      <input type="text" id="chat-input" placeholder="Who is that character again?" style="flex: 1;">
+      <button id="chat-send-btn">Send</button>
+    </div>
+    <audio id="response-player" hidden></audio>
   </section>
 </main>
 
 <script>
 (function () {
   const token = new URLSearchParams(window.location.search).get("token");
-  const state = { audioPath: null, transcript: null, currentSpanId: null };
+  const state = { audioPath: null, castPath: null, transcript: null, currentSpanId: null, session: null };
 
   async function apiFetch(path, options) {
     options = options || {};
@@ -192,6 +220,7 @@
   }).catch(function () { /* health check failing is surfaced by every other call anyway */ });
 
   const audioPathEl = document.getElementById("audio-path");
+  const castPathEl = document.getElementById("cast-path");
   const loadStatusEl = document.getElementById("load-status");
   const playerSection = document.getElementById("player-section");
   const bookTitleEl = document.getElementById("book-title");
@@ -203,6 +232,16 @@
       window.pywebview.api.pick_audio_file().then(function (path) {
         if (!path) return;
         loadBook(path);
+      });
+    });
+  });
+
+  document.getElementById("choose-cast-btn").addEventListener("click", function () {
+    withPywebviewApi(function () {
+      window.pywebview.api.pick_cast_file().then(function (path) {
+        if (!path) return;
+        state.castPath = path;
+        castPathEl.textContent = path;
       });
     });
   });
@@ -232,7 +271,7 @@
       player.src = URL.createObjectURL(audioBlob);
       playerSection.removeAttribute("disabled");
       setStatus("");
-      resetAskSection();
+      resetSessionSection();
     }).catch(function (err) {
       setStatus(err.message || String(err), true);
     });
@@ -249,20 +288,30 @@
     return { npz: withExtension(path, ".rag.npz"), json: withExtension(path, ".rag.json") };
   }
 
-  const askSection = document.getElementById("ask-section");
+  const sessionSection = document.getElementById("session-section");
   const ragStatusEl = document.getElementById("rag-status");
   const buildRagBtn = document.getElementById("build-rag-btn");
-  const askRow = document.getElementById("ask-row");
-  const questionInput = document.getElementById("question-input");
-  const askBtn = document.getElementById("ask-btn");
-  const answerEl = document.getElementById("answer");
+  const sessionStartRow = document.getElementById("session-start-row");
+  const modeSelect = document.getElementById("mode-select");
+  const startSessionBtn = document.getElementById("start-session-btn");
+  const sessionStatusEl = document.getElementById("session-status");
+  const chatLogEl = document.getElementById("chat-log");
+  const chatRow = document.getElementById("chat-row");
+  const chatInput = document.getElementById("chat-input");
+  const chatSendBtn = document.getElementById("chat-send-btn");
+  const responsePlayer = document.getElementById("response-player");
 
-  function resetAskSection() {
-    askSection.removeAttribute("disabled");
-    askRow.hidden = true;
+  function resetSessionSection() {
+    sessionSection.removeAttribute("disabled");
+    sessionStartRow.hidden = true;
     buildRagBtn.hidden = false;
+    buildRagBtn.disabled = false;
     ragStatusEl.textContent = "";
-    answerEl.textContent = "";
+    sessionStatusEl.textContent = "";
+    chatLogEl.hidden = true;
+    chatLogEl.innerHTML = "";
+    chatRow.hidden = true;
+    closeSession();
   }
 
   buildRagBtn.addEventListener("click", function () {
@@ -296,7 +345,7 @@
       }
       ragStatusEl.textContent = "Knowledge index ready.";
       buildRagBtn.hidden = true;
-      askRow.hidden = false;
+      sessionStartRow.hidden = false;
     });
   }
 
@@ -306,37 +355,131 @@
     return index === -1 ? 0 : index;
   }
 
-  function positionSummary() {
-    const seq = currentSeq();
-    const span = state.transcript.spans[seq];
-    return span ? ("chapter " + (span.chapter_index + 1) + ", near: “" + span.text.slice(0, 60) + "”") : "the start";
+  // Default checkpoints for Checkpoint/Learning mode: the first span of
+  // every chapter after the first -- a simple, working default with no
+  // authoring UI needed yet.
+  function chapterBoundaryCheckpoints() {
+    if (!state.transcript) return [];
+    const seen = new Set();
+    const checkpoints = [];
+    state.transcript.spans.forEach(function (span) {
+      if (!seen.has(span.chapter_index) && span.chapter_index > 0) {
+        seen.add(span.chapter_index);
+        checkpoints.push(span.span_id);
+      }
+    });
+    return checkpoints;
   }
 
-  askBtn.addEventListener("click", function () {
-    const question = questionInput.value.trim();
-    if (!question || !state.audioPath) return;
-    askBtn.disabled = true;
-    answerEl.textContent = "…";
+  function appendChatTurn(role, text) {
+    const div = document.createElement("div");
+    div.className = "chat-turn " + (role === "user" ? "user" : "narrator");
+    const roleEl = document.createElement("span");
+    roleEl.className = "role";
+    roleEl.textContent = role === "user" ? "You" : "Narrator";
+    div.appendChild(roleEl);
+    div.appendChild(document.createTextNode(text));
+    chatLogEl.appendChild(div);
+    chatLogEl.scrollTop = chatLogEl.scrollHeight;
+  }
 
-    const urls = ragUrls(state.audioPath);
-    apiFetch("/api/session/ask", {
+  const audioQueue = [];
+  let playingQueue = false;
+
+  function queueResponseAudio(base64Wav) {
+    audioQueue.push(base64Wav);
+    if (!playingQueue) playNextQueuedAudio();
+  }
+
+  function playNextQueuedAudio() {
+    const next = audioQueue.shift();
+    if (next === undefined) {
+      playingQueue = false;
+      return;
+    }
+    playingQueue = true;
+    responsePlayer.src = "data:audio/wav;base64," + next;
+    responsePlayer.play();
+  }
+
+  responsePlayer.addEventListener("ended", playNextQueuedAudio);
+
+  startSessionBtn.addEventListener("click", function () {
+    if (!state.audioPath || !state.castPath) {
+      sessionStatusEl.textContent = "Choose a cast file first.";
+      return;
+    }
+    startSessionBtn.disabled = true;
+    sessionStatusEl.textContent = "Starting session…";
+
+    const mode = modeSelect.value;
+    const checkpoints = (mode === "checkpoint" || mode === "learning") ? chapterBoundaryCheckpoints() : [];
+
+    apiFetch("/api/session/start", {
       method: "POST",
-      body: JSON.stringify({
-        book_title: state.transcript.book_title,
-        position_summary: positionSummary(),
-        rag_npz: urls.npz,
-        rag_json: urls.json,
-        current_seq: currentSeq(),
-        question: question,
-      }),
+      body: JSON.stringify({ m4b: state.audioPath, cast: state.castPath, mode: mode, checkpoints: checkpoints }),
     }).then(function (r) { return r.json(); }).then(function (result) {
-      answerEl.textContent = result.answer;
+      openSession(result.session_id, result.spoken);
+      sessionStatusEl.textContent = result.spoken ? "Session started (spoken responses)." : "Session started (text-only responses).";
+      sessionStartRow.hidden = true;
+      chatLogEl.hidden = false;
+      chatRow.hidden = false;
     }).catch(function (err) {
-      answerEl.textContent = "Error: " + (err.message || String(err));
-    }).finally(function () {
-      askBtn.disabled = false;
+      sessionStatusEl.textContent = err.message || String(err);
+      startSessionBtn.disabled = false;
     });
   });
+
+  function openSession(sessionId, spoken) {
+    closeSession();
+    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(
+      wsProtocol + "//" + window.location.host + "/api/session/" + sessionId + "/ws?token=" + encodeURIComponent(token)
+    );
+    state.session = { ws: ws, id: sessionId, spoken: spoken };
+
+    ws.addEventListener("message", function (evt) {
+      const message = JSON.parse(evt.data);
+      if (message.type === "answer") {
+        appendChatTurn("narrator", message.text);
+        chatInput.disabled = false;
+        chatSendBtn.disabled = false;
+        if (player.paused === false) { /* main narration kept playing (QA mode) */ }
+      } else if (message.type === "awaiting_input") {
+        player.pause();
+        appendChatTurn("narrator", message.text);
+        chatInput.disabled = false;
+        chatSendBtn.disabled = false;
+        chatInput.focus();
+      } else if (message.type === "audio_chunk") {
+        queueResponseAudio(message.data);
+      } else if (message.type === "error") {
+        appendChatTurn("narrator", "Error: " + message.detail);
+      }
+    });
+  }
+
+  function closeSession() {
+    if (state.session && state.session.ws) {
+      try { state.session.ws.close(); } catch (e) { /* already closed */ }
+    }
+    state.session = null;
+  }
+
+  chatSendBtn.addEventListener("click", sendChatMessage);
+  chatInput.addEventListener("keydown", function (evt) {
+    if (evt.key === "Enter") sendChatMessage();
+  });
+
+  function sendChatMessage() {
+    const text = chatInput.value.trim();
+    if (!text || !state.session || !state.session.ws) return;
+    appendChatTurn("user", text);
+    chatInput.value = "";
+    chatInput.disabled = true;
+    chatSendBtn.disabled = true;
+    state.session.ws.send(JSON.stringify({ type: "chat", text: text }));
+  }
 
   function renderTranscript(transcript) {
     const frag = document.createDocumentFragment();
@@ -394,6 +537,9 @@
     if (el) {
       el.classList.add("current");
       el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+    if (state.session && state.session.ws && state.session.ws.readyState === WebSocket.OPEN) {
+      state.session.ws.send(JSON.stringify({ type: "position", span_id: span.span_id }));
     }
   });
 })();

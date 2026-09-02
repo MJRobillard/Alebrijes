@@ -156,6 +156,34 @@ def test_cyoa_mode_injects_steer_back_beat_after_max_improv_exchanges() -> None:
     assert "Span text number 4" in captured[-1]
 
 
+def test_handle_user_message_calls_on_delta_progressively() -> None:
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        yield "Part one. "
+        yield "Part two."
+
+    session = _session(chat_stream_fn=chat_stream_fn)
+    deltas = []
+
+    event = session.handle_user_message("hi", on_delta=deltas.append)
+
+    assert deltas == ["Part one. ", "Part two."]
+    assert event.text == "Part one. Part two."
+
+
+def test_advance_position_checkpoint_prompt_also_supports_on_delta() -> None:
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        yield "Pause "
+        yield "point."
+
+    session = _session(mode=SessionMode.CHECKPOINT, checkpoints=["0.2.0"], chat_stream_fn=chat_stream_fn)
+    deltas = []
+
+    event = session.advance_position("0.2.0", on_delta=deltas.append)
+
+    assert deltas == ["Pause ", "point."]
+    assert event.text == "Pause point."
+
+
 def test_history_is_capped_to_history_limit() -> None:
     session = _session(history_limit=2)
     for i in range(5):

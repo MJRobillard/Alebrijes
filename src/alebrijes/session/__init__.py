@@ -102,10 +102,13 @@ class InteractiveSession:
         bound = self.current_seq if max_seq is None else max_seq
         return search_rag(self.rag_index, query_vector, max_seq=bound, top_k=self.top_k)
 
-    def advance_position(self, span_id: str) -> Optional[SessionEvent]:
+    def advance_position(
+        self, span_id: str, *, on_delta: Optional[Callable[[str], None]] = None
+    ) -> Optional[SessionEvent]:
         """Called as playback reaches `span_id`. Returns an `awaiting_input`
         event (and pauses) if this position is a checkpoint in CHECKPOINT or
-        LEARNING mode; otherwise just updates position and returns None."""
+        LEARNING mode; otherwise just updates position and returns None.
+        See `handle_user_message` for what `on_delta` is for."""
         self.current_span_id = span_id
         if self.mode not in (SessionMode.CHECKPOINT, SessionMode.LEARNING):
             return None
@@ -123,12 +126,27 @@ class InteractiveSession:
             history=self.history[-self.history_limit :],
             user_message="(narration has reached a pause point)",
         )
-        prompt_text = "".join(self._chat_stream_fn(messages))
+        chunks: list[str] = []
+        for delta in self._chat_stream_fn(messages):
+            if on_delta is not None:
+                on_delta(delta)
+            chunks.append(delta)
+        prompt_text = "".join(chunks)
         self.history.append(ChatTurn(role="assistant", content=prompt_text))
         self.history = self.history[-self.history_limit :]
         return SessionEvent(kind="awaiting_input", text=prompt_text)
 
-    def handle_user_message(self, user_message: str) -> SessionEvent:
+    def handle_user_message(
+        self, user_message: str, *, on_delta: Optional[Callable[[str], None]] = None
+    ) -> SessionEvent:
+        """`on_delta`, if given, is called with each raw content delta from
+        the LLM as it streams in — before this method has assembled the
+        full answer or updated history. Callers that need to react
+        progressively (e.g. server.py's chat handler, synthesizing audio
+        sentence-by-sentence via `synth.streaming.SentenceChunker` as the
+        response is generated) hook in here instead of waiting for the
+        `SessionEvent` this returns.
+        """
         self.state = SessionState.GENERATING_RESPONSE
         hits = self._retrieve(user_message)
         rag_excerpts = [hit.entry.text for hit in hits]
@@ -151,7 +169,12 @@ class InteractiveSession:
             history=self.history[-self.history_limit :],
             user_message=user_message,
         )
-        answer = "".join(self._chat_stream_fn(messages))
+        chunks: list[str] = []
+        for delta in self._chat_stream_fn(messages):
+            if on_delta is not None:
+                on_delta(delta)
+            chunks.append(delta)
+        answer = "".join(chunks)
 
         self.history.append(ChatTurn(role="user", content=user_message))
         self.history.append(ChatTurn(role="assistant", content=answer))
