@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
 from alebrijes.cast import CastEntry, CastFile, load as load_cast, save as save_cast
@@ -45,6 +45,7 @@ from alebrijes.config import BUILTIN_VOICES, Config
 from alebrijes.ingest import Book
 from alebrijes.preview import synthesize_preview as default_synthesize_preview
 from alebrijes.render import render_book as default_render_book
+from alebrijes.transcript import load as load_transcript
 
 
 def find_free_port(host: str = "127.0.0.1") -> int:
@@ -426,6 +427,25 @@ def create_app(
                 error=job.error,
             )
 
+    @app.get("/api/book/transcript", dependencies=[Depends(_verify_request)])
+    def book_transcript(path: str) -> Response:
+        # `path` is the rendered .m4b's path; the transcript sidecar lives
+        # alongside it at the same convention `render_book` writes to
+        # (`output_path.with_suffix(".transcript.json")`) — see transcript.py.
+        transcript_path = Path(path).with_suffix(".transcript.json")
+        if not transcript_path.exists():
+            raise HTTPException(status_code=404, detail=f"No transcript found for {path}")
+        return Response(content=transcript_path.read_text(encoding="utf-8"), media_type="application/json")
+
+    @app.get("/api/book/audio", dependencies=[Depends(_verify_request)])
+    def book_audio(path: str) -> FileResponse:
+        # FileResponse (not a raw Response) so Starlette serves Range
+        # requests for scrubbing without us reimplementing that.
+        audio_path = Path(path)
+        if not audio_path.exists():
+            raise HTTPException(status_code=404, detail=f"No audio file found at {path}")
+        return FileResponse(audio_path, media_type="audio/mp4")
+
     # Deliberately NOT behind _verify_request: this is just the static app
     # shell (HTML/CSS/JS), no secret embedded in it. The token only ever
     # appears in the URL pywebview navigates to directly (see gui.py) — the
@@ -437,10 +457,15 @@ def create_app(
     def index() -> str:
         return _FRONTEND_HTML_PATH.read_text(encoding="utf-8")
 
+    @app.get("/listen", response_class=HTMLResponse)
+    def listen() -> str:
+        return _LISTEN_HTML_PATH.read_text(encoding="utf-8")
+
     return app
 
 
 _FRONTEND_HTML_PATH = Path(__file__).parent / "frontend" / "index.html"
+_LISTEN_HTML_PATH = Path(__file__).parent / "frontend" / "listen.html"
 
 
 def run_server_blocking(host: str = "127.0.0.1", port: int | None = None) -> None:

@@ -5,11 +5,23 @@ from alebrijes.segment import Span, SpanKind
 
 
 def _narration(text: str, paragraph: int = 0) -> Span:
-    return Span(text=text, kind=SpanKind.NARRATION, chapter_index=0, paragraph_index=paragraph)
+    return Span(
+        text=text,
+        kind=SpanKind.NARRATION,
+        chapter_index=0,
+        paragraph_index=paragraph,
+        span_id=f"0.{paragraph}.0",
+    )
 
 
 def _dialogue(text: str, paragraph: int = 0) -> Span:
-    return Span(text=text, kind=SpanKind.DIALOGUE, chapter_index=0, paragraph_index=paragraph)
+    return Span(
+        text=text,
+        kind=SpanKind.DIALOGUE,
+        chapter_index=0,
+        paragraph_index=paragraph,
+        span_id=f"0.{paragraph}.0",
+    )
 
 
 def test_named_subject_before_quote_is_high_confidence() -> None:

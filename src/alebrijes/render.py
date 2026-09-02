@@ -35,6 +35,8 @@ from alebrijes.ingest import Book, Chapter
 from alebrijes.segment import Span, SpanKind, segment_paragraph
 from alebrijes.synth.agent import TTSAgent, write_wav_array
 from alebrijes.synth.parallel import build_m4b
+from alebrijes.transcript import ChapterMark, SpanTiming, Transcript
+from alebrijes.transcript import save as save_transcript
 
 NARRATOR = "Narrator"
 DEFAULT_PAUSE_MS = 250
@@ -57,7 +59,7 @@ def resolve_chapter_spans(chapter: Chapter, cast_file: CastFile) -> list[VoicedS
     step hasn't seen/assigned yet).
     """
     spans = [span for paragraph in chapter.paragraphs for span in segment_paragraph(paragraph, chapter.index)]
-    attributions_by_span = {id(a.span): a for a in RuleBasedAttributor().attribute(spans)}
+    attributions_by_span = {a.span.span_id: a for a in RuleBasedAttributor().attribute(spans)}
     narrator_voice = cast_file.voice_for(NARRATOR)
 
     voiced: list[VoicedSpan] = []
@@ -66,7 +68,7 @@ def resolve_chapter_spans(chapter: Chapter, cast_file: CastFile) -> list[VoicedS
             voiced.append(VoicedSpan(span, NARRATOR, narrator_voice))
             continue
 
-        attribution = attributions_by_span.get(id(span))
+        attribution = attributions_by_span.get(span.span_id)
         character = attribution.character if attribution else UNKNOWN
         if character == UNKNOWN:
             voiced.append(VoicedSpan(span, NARRATOR, narrator_voice))
@@ -118,10 +120,17 @@ def synthesize_chapter(
     voice_states: dict[str, tuple[str, object]],
     agent: TTSAgent,
     pause_ms: int = DEFAULT_PAUSE_MS,
-) -> np.ndarray:
-    """Synthesizes every span in order, swapping voices per line as needed."""
+) -> tuple[np.ndarray, list[SpanTiming]]:
+    """Synthesizes every span in order, swapping voices per line as needed.
+
+    Returns the concatenated chapter audio plus each span's (start_ms, end_ms)
+    within that audio (pauses excluded from the span's own span, but counted
+    toward the cursor so later spans still land at their real offset).
+    """
     rendered: list[np.ndarray] = []
+    timings: list[SpanTiming] = []
     pause_samples = int(agent.sample_rate * (pause_ms / 1000.0))
+    cursor_samples = 0
 
     for voiced in voiced_spans:
         voice_prompt, state = voice_states[voiced.character]
@@ -129,13 +138,29 @@ def synthesize_chapter(
         audio = agent.synthesize(voiced.span.text)
         if audio.size == 0:
             continue
+        start_ms = round(cursor_samples / agent.sample_rate * 1000)
+        cursor_samples += audio.size
+        end_ms = round(cursor_samples / agent.sample_rate * 1000)
+        timings.append(
+            SpanTiming(
+                span_id=voiced.span.span_id,
+                chapter_index=voiced.span.chapter_index,
+                paragraph_index=voiced.span.paragraph_index,
+                character=voiced.character,
+                kind=voiced.span.kind,
+                text=voiced.span.text,
+                start_ms=start_ms,
+                end_ms=end_ms,
+            )
+        )
         rendered.append(audio)
         if pause_samples > 0:
             rendered.append(np.zeros(pause_samples, dtype=audio.dtype))
+            cursor_samples += pause_samples
 
     if not rendered:
         raise RuntimeError("No audio rendered from chapter.")
-    return np.concatenate(rendered)
+    return np.concatenate(rendered), timings
 
 
 def render_book(
@@ -146,6 +171,7 @@ def render_book(
     pause_ms: int = DEFAULT_PAUSE_MS,
     model: object | None = None,
     on_chapter_done: Callable[[int, int], None] | None = None,
+    transcript_path: Path | None = None,
 ) -> Path:
     """Renders `book` with `cast_file`'s voices to a chaptered .m4b at `output_path`.
 
@@ -153,6 +179,11 @@ def render_book(
     synthesizing — chapter-level granularity only (not per-line), since that's
     what's available without restructuring `synthesize_chapter`'s sequential
     loop. Good enough for a progress bar; not real-time per-line progress.
+
+    Also writes a `Transcript` sidecar (`transcript_path`, defaulting to
+    `output_path.with_suffix(".transcript.json")`) mapping every span to its
+    whole-book audio position, for a live "now narrating" player view and
+    position-bounded retrieval.
     """
     # build_m4b (the very last step) already raises a clear RuntimeError if
     # ffmpeg is missing, but by then every chapter has already been
@@ -178,18 +209,40 @@ def render_book(
     try:
         part_paths: list[Path] = []
         chapter_titles: list[str] = []
+        chapter_marks: list[ChapterMark] = []
+        all_timings: list[SpanTiming] = []
         total_chapters = len(book.chapters)
+        book_cursor_ms = 0
         for chapter in book.chapters:
             voiced_spans = resolve_chapter_spans(chapter, cast_file)
-            audio = synthesize_chapter(voiced_spans, voice_states, agent, pause_ms=pause_ms)
+            audio, chapter_timings = synthesize_chapter(voiced_spans, voice_states, agent, pause_ms=pause_ms)
 
             part_path = staging_dir / f"chapter_{chapter.index:04d}.wav"
             write_wav_array(part_path, agent.sample_rate, audio)
             part_paths.append(part_path)
-            chapter_titles.append(chapter.title or f"Chapter {chapter.index + 1}")
+            title = chapter.title or f"Chapter {chapter.index + 1}"
+            chapter_titles.append(title)
+
+            chapter_start_ms = book_cursor_ms
+            chapter_duration_ms = round(audio.size / agent.sample_rate * 1000)
+            book_cursor_ms += chapter_duration_ms
+            chapter_marks.append(ChapterMark(chapter.index, title, chapter_start_ms, book_cursor_ms))
+            for timing in chapter_timings:
+                timing.start_ms += chapter_start_ms
+                timing.end_ms += chapter_start_ms
+            all_timings.extend(chapter_timings)
+
             if on_chapter_done is not None:
                 on_chapter_done(len(part_paths), total_chapters)
 
-        return build_m4b(part_paths, chapter_titles, output_path, book_title=book.title)
+        m4b_path = build_m4b(part_paths, chapter_titles, output_path, book_title=book.title)
+
+        resolved_transcript_path = transcript_path or output_path.with_suffix(".transcript.json")
+        save_transcript(
+            Transcript(book_title=book.title, chapters=chapter_marks, spans=all_timings),
+            resolved_transcript_path,
+        )
+
+        return m4b_path
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)

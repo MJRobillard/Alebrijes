@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Alebrijes — Listen</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f4f0;
+    --panel: #ffffff;
+    --ink: #1c1b19;
+    --ink-soft: #6b665c;
+    --line: #ded9cd;
+    --accent: #2f6f6b;
+    --accent-ink: #ffffff;
+    --danger: #a6432f;
+    --highlight-bg: #e4efec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --panel: #1f2123;
+      --ink: #eceae4;
+      --ink-soft: #a09a8d;
+      --line: #34363a;
+      --accent: #4fa39d;
+      --accent-ink: #0e1a19;
+      --danger: #e08066;
+      --highlight-bg: #223330;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  main {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
+  .subtitle { color: var(--ink-soft); margin: 0 0 2rem; font-size: 0.9rem; }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 1.25rem 1.4rem;
+    margin-bottom: 1.25rem;
+  }
+  section h2 { font-size: 1rem; margin: 0 0 0.9rem; }
+  section[disabled] { opacity: 0.5; pointer-events: none; }
+  button {
+    font: inherit;
+    background: var(--accent);
+    color: var(--accent-ink);
+    border: none;
+    border-radius: 5px;
+    padding: 0.5rem 0.9rem;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .row { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
+  .path {
+    font-family: ui-monospace, monospace;
+    font-size: 0.82rem;
+    color: var(--ink-soft);
+    word-break: break-all;
+  }
+  .status { font-size: 0.88rem; color: var(--ink-soft); }
+  .status.error { color: var(--danger); }
+  audio { width: 100%; margin-top: 0.75rem; }
+  #transcript {
+    margin-top: 1rem;
+    max-height: 55vh;
+    overflow-y: auto;
+    border-top: 1px solid var(--line);
+    padding-top: 0.75rem;
+  }
+  .span-line {
+    padding: 0.5rem 0.6rem;
+    border-radius: 5px;
+    margin-bottom: 0.15rem;
+    font-size: 0.92rem;
+  }
+  .span-line .character {
+    display: block;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--ink-soft);
+    margin-bottom: 0.1rem;
+  }
+  .span-line.current {
+    background: var(--highlight-bg);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .span-line.current .character { color: var(--accent); }
+  #warning-banner {
+    background: var(--amber-bg, #f3e3c9);
+    border: 1px solid var(--danger);
+    color: var(--ink);
+    border-radius: 6px;
+    padding: 0.7rem 0.9rem;
+    font-size: 0.85rem;
+    margin-bottom: 1.25rem;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Listen</h1>
+  <p class="subtitle">Play a rendered audiobook with a live, scrollable transcript.</p>
+
+  <div id="warning-banner" hidden></div>
+
+  <section id="book-section">
+    <h2>Choose a rendered audiobook</h2>
+    <div class="row">
+      <button id="choose-audio-btn">Choose Audiobook (.m4b)…</button>
+      <span id="audio-path" class="path">No audiobook selected.</span>
+    </div>
+    <div id="load-status" class="status"></div>
+  </section>
+
+  <section id="player-section" disabled>
+    <h2 id="book-title">Now Playing</h2>
+    <audio id="player" controls preload="auto"></audio>
+    <div id="transcript"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  const token = new URLSearchParams(window.location.search).get("token");
+  const state = { audioPath: null, transcript: null, currentSpanId: null };
+
+  async function apiFetch(path, options) {
+    options = options || {};
+    const headers = Object.assign({ "X-Alebrijes-Token": token }, options.headers || {});
+    if (options.body) headers["Content-Type"] = "application/json";
+    const response = await fetch(path, Object.assign({}, options, { headers }));
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || `Request failed (${response.status})`);
+    }
+    return response;
+  }
+
+  function withPywebviewApi(callback) {
+    if (window.pywebview && window.pywebview.api) return callback();
+    window.addEventListener("pywebviewready", callback, { once: true });
+  }
+
+  apiFetch("/api/health").then(function (response) {
+    return response.json();
+  }).then(function (result) {
+    if (result.warnings && result.warnings.length) {
+      const banner = document.getElementById("warning-banner");
+      banner.textContent = result.warnings.join(" ");
+      banner.hidden = false;
+    }
+  }).catch(function () { /* health check failing is surfaced by every other call anyway */ });
+
+  const audioPathEl = document.getElementById("audio-path");
+  const loadStatusEl = document.getElementById("load-status");
+  const playerSection = document.getElementById("player-section");
+  const bookTitleEl = document.getElementById("book-title");
+  const player = document.getElementById("player");
+  const transcriptEl = document.getElementById("transcript");
+
+  document.getElementById("choose-audio-btn").addEventListener("click", function () {
+    withPywebviewApi(function () {
+      window.pywebview.api.pick_audio_file().then(function (path) {
+        if (!path) return;
+        loadBook(path);
+      });
+    });
+  });
+
+  function setStatus(message, isError) {
+    loadStatusEl.textContent = message || "";
+    loadStatusEl.classList.toggle("error", !!isError);
+  }
+
+  function loadBook(path) {
+    state.audioPath = path;
+    audioPathEl.textContent = path;
+    setStatus("Loading transcript…");
+    playerSection.setAttribute("disabled", "");
+    transcriptEl.innerHTML = "";
+
+    Promise.all([
+      apiFetch("/api/book/transcript?path=" + encodeURIComponent(path)).then(function (r) { return r.json(); }),
+      apiFetch("/api/book/audio?path=" + encodeURIComponent(path)).then(function (r) { return r.blob(); }),
+    ]).then(function (results) {
+      const transcript = results[0];
+      const audioBlob = results[1];
+      state.transcript = transcript;
+      state.currentSpanId = null;
+      bookTitleEl.textContent = transcript.book_title || "Now Playing";
+      renderTranscript(transcript);
+      player.src = URL.createObjectURL(audioBlob);
+      playerSection.removeAttribute("disabled");
+      setStatus("");
+    }).catch(function (err) {
+      setStatus(err.message || String(err), true);
+    });
+  }
+
+  function renderTranscript(transcript) {
+    const frag = document.createDocumentFragment();
+    transcript.spans.forEach(function (span) {
+      const line = document.createElement("div");
+      line.className = "span-line";
+      line.id = "span-" + span.span_id;
+      line.dataset.spanId = span.span_id;
+      line.dataset.startMs = span.start_ms;
+      line.dataset.endMs = span.end_ms;
+
+      const character = document.createElement("span");
+      character.className = "character";
+      character.textContent = span.character;
+      line.appendChild(character);
+
+      const text = document.createElement("span");
+      text.textContent = span.text;
+      line.appendChild(text);
+
+      frag.appendChild(line);
+    });
+    transcriptEl.appendChild(frag);
+  }
+
+  // Binary search: transcript.spans is sorted by start_ms (render order),
+  // so find the last span whose start_ms <= currentMs.
+  function spanAt(currentMs) {
+    const spans = state.transcript.spans;
+    let lo = 0, hi = spans.length - 1, best = null;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (spans[mid].start_ms <= currentMs) {
+        best = spans[mid];
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return best;
+  }
+
+  player.addEventListener("timeupdate", function () {
+    if (!state.transcript) return;
+    const currentMs = player.currentTime * 1000;
+    const span = spanAt(currentMs);
+    if (!span || span.span_id === state.currentSpanId) return;
+
+    if (state.currentSpanId) {
+      const previous = document.getElementById("span-" + state.currentSpanId);
+      if (previous) previous.classList.remove("current");
+    }
+    state.currentSpanId = span.span_id;
+    const el = document.getElementById("span-" + span.span_id);
+    if (el) {
+      el.classList.add("current");
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  });
+})();
+</script>
+</body>
+</html>

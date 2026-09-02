@@ -8,7 +8,9 @@ from fastapi.testclient import TestClient
 
 from alebrijes.cast import CastEntry, CastFile, save as save_cast
 from alebrijes.ingest import Book, Chapter, Paragraph
+from alebrijes.segment import SpanKind
 from alebrijes.server import create_app, find_free_port, generate_token
+from alebrijes.transcript import ChapterMark, SpanTiming, Transcript, save as save_transcript
 from epub_fixtures import build_epub
 
 TOKEN = "test-token"
@@ -487,3 +489,74 @@ def test_render_status_for_unknown_job_id_is_404() -> None:
     client = _client()
     response = client.get("/api/render/does-not-exist", headers=_headers())
     assert response.status_code == 404
+
+
+# --- /api/book/transcript, /api/book/audio, /listen (Phase A player) ------
+
+
+def _fixture_transcript() -> Transcript:
+    return Transcript(
+        book_title="Fixture",
+        chapters=[ChapterMark(index=0, title="One", start_ms=0, end_ms=1000)],
+        spans=[
+            SpanTiming(
+                span_id="0.0.0",
+                chapter_index=0,
+                paragraph_index=0,
+                character="Narrator",
+                kind=SpanKind.NARRATION,
+                text="Some text.",
+                start_ms=0,
+                end_ms=1000,
+            )
+        ],
+    )
+
+
+def test_book_transcript_endpoint_derives_path_from_m4b_and_returns_json(tmp_path: Path) -> None:
+    m4b_path = tmp_path / "book.m4b"
+    save_transcript(_fixture_transcript(), m4b_path.with_suffix(".transcript.json"))
+
+    client = _client()
+    response = client.get(
+        "/api/book/transcript", headers=_headers(), params={"path": str(m4b_path)}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["book_title"] == "Fixture"
+    assert body["spans"][0]["span_id"] == "0.0.0"
+
+
+def test_book_transcript_endpoint_404s_when_sidecar_missing(tmp_path: Path) -> None:
+    client = _client()
+    response = client.get(
+        "/api/book/transcript", headers=_headers(), params={"path": str(tmp_path / "missing.m4b")}
+    )
+    assert response.status_code == 404
+
+
+def test_book_audio_endpoint_returns_file_bytes(tmp_path: Path) -> None:
+    m4b_path = tmp_path / "book.m4b"
+    m4b_path.write_bytes(b"fake-m4b-bytes")
+
+    client = _client()
+    response = client.get("/api/book/audio", headers=_headers(), params={"path": str(m4b_path)})
+
+    assert response.status_code == 200
+    assert response.content == b"fake-m4b-bytes"
+
+
+def test_book_audio_endpoint_404s_when_file_missing(tmp_path: Path) -> None:
+    client = _client()
+    response = client.get(
+        "/api/book/audio", headers=_headers(), params={"path": str(tmp_path / "missing.m4b")}
+    )
+    assert response.status_code == 404
+
+
+def test_listen_route_is_unauthenticated_static_shell() -> None:
+    client = _client()
+    response = client.get("/listen")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]

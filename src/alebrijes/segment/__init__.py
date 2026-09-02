@@ -56,6 +56,7 @@ class Span:
     kind: SpanKind
     chapter_index: int
     paragraph_index: int
+    span_id: str
 
 
 def _clean(chunk: str) -> str:
@@ -76,34 +77,42 @@ def _is_probable_dialogue(quote_text: str, before: str, after: str) -> bool:
     return before.rstrip().endswith(":")
 
 
+def _span_id(chapter_index: int, paragraph_index: int, offset: int) -> str:
+    return f"{chapter_index}.{paragraph_index}.{offset}"
+
+
 def segment_paragraph(paragraph: Paragraph, chapter_index: int) -> list[Span]:
     text = paragraph.text
     spans: list[Span] = []
+
+    def _append(span_text: str, kind: SpanKind) -> None:
+        span_id = _span_id(chapter_index, paragraph.index, len(spans))
+        spans.append(Span(span_text, kind, chapter_index, paragraph.index, span_id))
 
     matches = list(_QUOTE_RE.finditer(text))
     if not matches:
         clean = _clean(text)
         if clean:
-            spans.append(Span(clean, SpanKind.NARRATION, chapter_index, paragraph.index))
+            _append(clean, SpanKind.NARRATION)
         return spans
 
     cursor = 0
     for match in matches:
         narration = _clean(text[cursor : match.start()])
         if narration:
-            spans.append(Span(narration, SpanKind.NARRATION, chapter_index, paragraph.index))
+            _append(narration, SpanKind.NARRATION)
 
         quote_text = _clean(match.group(1))
         if quote_text:
             before = text[max(0, match.start() - _CONTEXT_WINDOW) : match.start()].lower()
             after = text[match.end() : match.end() + _CONTEXT_WINDOW].lower()
             kind = SpanKind.DIALOGUE if _is_probable_dialogue(quote_text, before, after) else SpanKind.NARRATION
-            spans.append(Span(quote_text, kind, chapter_index, paragraph.index))
+            _append(quote_text, kind)
 
         cursor = match.end()
 
     tail = _clean(text[cursor:])
     if tail:
-        spans.append(Span(tail, SpanKind.NARRATION, chapter_index, paragraph.index))
+        _append(tail, SpanKind.NARRATION)
 
     return spans

@@ -144,14 +144,14 @@ def test_synthesize_chapter_preserves_order_and_uses_correct_voice_per_line() ->
     from alebrijes.segment import Span
 
     voiced_spans = [
-        VoicedSpan(Span("Narration one.", SpanKind.NARRATION, 0, 0), NARRATOR, "alba"),
-        VoicedSpan(Span("Dialogue line.", SpanKind.DIALOGUE, 0, 1), "Colin", "javert"),
-        VoicedSpan(Span("Narration two.", SpanKind.NARRATION, 0, 2), NARRATOR, "alba"),
+        VoicedSpan(Span("Narration one.", SpanKind.NARRATION, 0, 0, "0.0.0"), NARRATOR, "alba"),
+        VoicedSpan(Span("Dialogue line.", SpanKind.DIALOGUE, 0, 1, "0.1.0"), "Colin", "javert"),
+        VoicedSpan(Span("Narration two.", SpanKind.NARRATION, 0, 2, "0.2.0"), NARRATOR, "alba"),
     ]
     voice_states = {NARRATOR: ("alba", object()), "Colin": ("javert", object())}
     agent = _RecordingAgent()
 
-    audio = synthesize_chapter(voiced_spans, voice_states, agent, pause_ms=0)
+    audio, timings = synthesize_chapter(voiced_spans, voice_states, agent, pause_ms=0)
 
     assert agent.calls == [
         ("alba", "Narration one."),
@@ -159,6 +159,8 @@ def test_synthesize_chapter_preserves_order_and_uses_correct_voice_per_line() ->
         ("alba", "Narration two."),
     ]
     assert audio.size == 4 * 3  # three lines, no pause samples requested
+    assert [t.span_id for t in timings] == ["0.0.0", "0.1.0", "0.2.0"]
+    assert [t.character for t in timings] == [NARRATOR, "Colin", NARRATOR]
 
 
 def test_synthesize_chapter_inserts_silence_between_lines() -> None:
@@ -166,14 +168,14 @@ def test_synthesize_chapter_inserts_silence_between_lines() -> None:
     from alebrijes.segment import Span
 
     voiced_spans = [
-        VoicedSpan(Span("One.", SpanKind.NARRATION, 0, 0), NARRATOR, "alba"),
-        VoicedSpan(Span("Two.", SpanKind.NARRATION, 0, 1), NARRATOR, "alba"),
+        VoicedSpan(Span("One.", SpanKind.NARRATION, 0, 0, "0.0.0"), NARRATOR, "alba"),
+        VoicedSpan(Span("Two.", SpanKind.NARRATION, 0, 1, "0.1.0"), NARRATOR, "alba"),
     ]
     voice_states = {NARRATOR: ("alba", object())}
     agent = _RecordingAgent()
     agent.sample_rate = 1000
 
-    audio = synthesize_chapter(voiced_spans, voice_states, agent, pause_ms=250)
+    audio, timings = synthesize_chapter(voiced_spans, voice_states, agent, pause_ms=250)
 
     # A pause follows every rendered line (including the last), matching
     # pocket-tts-agent's _synthesize_segments: 2 lines x (4 audio + 250 pause).

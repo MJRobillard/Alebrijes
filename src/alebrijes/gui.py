@@ -23,6 +23,7 @@ from typing import Optional
 
 _BOOK_FILE_TYPES = ("Book files (*.epub;*.pdf;*.txt)", "All files (*.*)")
 _VOICE_FILE_TYPES = ("Voice state files (*.pt;*.safetensors)", "All files (*.*)")
+_AUDIO_FILE_TYPES = ("Rendered audiobooks (*.m4b)", "All files (*.*)")
 
 
 class FileApi:
@@ -33,6 +34,9 @@ class FileApi:
 
     def pick_voice_file(self) -> Optional[str]:
         return self._pick(_VOICE_FILE_TYPES)
+
+    def pick_audio_file(self) -> Optional[str]:
+        return self._pick(_AUDIO_FILE_TYPES)
 
     def _pick(self, file_types: tuple[str, ...]) -> Optional[str]:
         import webview
