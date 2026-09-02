@@ -140,13 +140,25 @@
 
   <section id="book-section">
     <h2>Choose a rendered audiobook</h2>
+    <p class="hint" id="no-pywebview-hint" hidden>
+      Native file pickers only work inside the desktop app window. In a
+      browser tab, type or paste the full file path instead.
+    </p>
     <div class="row">
       <button id="choose-audio-btn">Choose Audiobook (.m4b)…</button>
       <span id="audio-path" class="path">No audiobook selected.</span>
     </div>
+    <div class="row" id="audio-path-row" style="margin-top: 0.4rem;">
+      <input type="text" id="audio-path-input" placeholder="/path/to/book.m4b" style="flex: 1;">
+      <button id="audio-path-load-btn">Load</button>
+    </div>
     <div class="row" style="margin-top: 0.5rem;">
       <button id="choose-cast-btn">Choose Cast File (.cast.yaml)…</button>
       <span id="cast-path" class="path">No cast file selected.</span>
+    </div>
+    <div class="row" id="cast-path-row" style="margin-top: 0.4rem;">
+      <input type="text" id="cast-path-input" placeholder="/path/to/book.cast.yaml" style="flex: 1;">
+      <button id="cast-path-load-btn">Set</button>
     </div>
     <div id="load-status" class="status"></div>
   </section>
@@ -209,6 +221,30 @@
     window.addEventListener("pywebviewready", callback, { once: true });
   }
 
+  // Native pickers (window.pywebview.api.*) only exist inside the desktop
+  // app's own window -- in a plain browser tab (how /listen is normally
+  // reached, since that window has no address bar to navigate here),
+  // window.pywebview never appears. Detect that within a beat and fall
+  // back to manual path entry instead of buttons that silently do nothing.
+  function detectPywebview() {
+    return new Promise(function (resolve) {
+      if (window.pywebview && window.pywebview.api) return resolve(true);
+      const timer = setTimeout(function () { resolve(false); }, 300);
+      window.addEventListener("pywebviewready", function () {
+        clearTimeout(timer);
+        resolve(true);
+      }, { once: true });
+    });
+  }
+
+  detectPywebview().then(function (hasPywebview) {
+    document.getElementById("no-pywebview-hint").hidden = hasPywebview;
+    document.getElementById("choose-audio-btn").hidden = !hasPywebview;
+    document.getElementById("choose-cast-btn").hidden = !hasPywebview;
+    document.getElementById("audio-path-row").hidden = hasPywebview;
+    document.getElementById("cast-path-row").hidden = hasPywebview;
+  });
+
   apiFetch("/api/health").then(function (response) {
     return response.json();
   }).then(function (result) {
@@ -244,6 +280,27 @@
         castPathEl.textContent = path;
       });
     });
+  });
+
+  const audioPathInput = document.getElementById("audio-path-input");
+  document.getElementById("audio-path-load-btn").addEventListener("click", function () {
+    const path = audioPathInput.value.trim();
+    if (!path) return;
+    loadBook(path);
+  });
+  audioPathInput.addEventListener("keydown", function (evt) {
+    if (evt.key === "Enter") document.getElementById("audio-path-load-btn").click();
+  });
+
+  const castPathInput = document.getElementById("cast-path-input");
+  document.getElementById("cast-path-load-btn").addEventListener("click", function () {
+    const path = castPathInput.value.trim();
+    if (!path) return;
+    state.castPath = path;
+    castPathEl.textContent = path;
+  });
+  castPathInput.addEventListener("keydown", function (evt) {
+    if (evt.key === "Enter") document.getElementById("cast-path-load-btn").click();
   });
 
   function setStatus(message, isError) {

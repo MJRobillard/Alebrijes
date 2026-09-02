@@ -41,6 +41,8 @@
   }
   h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
   .subtitle { color: var(--ink-soft); margin: 0 0 2rem; font-size: 0.9rem; }
+  .subtitle a { color: var(--accent); font-weight: 600; text-decoration: none; margin-left: 0.5rem; }
+  .subtitle a:hover { text-decoration: underline; }
   section {
     background: var(--panel);
     border: 1px solid var(--line);
@@ -145,7 +147,10 @@
 <body>
 <main>
   <h1>Alebrijes</h1>
-  <p class="subtitle">Local, multi-voice book-to-audiobook.</p>
+  <p class="subtitle">
+    Local, multi-voice book-to-audiobook.
+    <a id="listen-link" href="#">Listen &amp; ask questions &rarr;</a>
+  </p>
 
   <div id="warning-banner" hidden></div>
 
@@ -227,6 +232,10 @@
 (function () {
   const token = new URLSearchParams(window.location.search).get("token");
   const state = { bookPath: null, castPath: null };
+
+  const listenLink = document.getElementById("listen-link");
+  listenLink.href = "/listen?token=" + encodeURIComponent(token);
+  listenLink.target = "_blank"; // open alongside this page, not instead of it -- both stay usable
 
   async function apiFetch(path, options) {
     options = options || {};
