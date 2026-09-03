@@ -111,3 +111,62 @@ def test_parse_uses_file_stem_as_book_title(tmp_path: Path) -> None:
     book = parse(path)
 
     assert book.title == "My Great Book"
+
+
+def test_parse_attaches_quiz_marker_to_preceding_line(tmp_path: Path) -> None:
+    path = tmp_path / "book.script"
+    path.write_text(
+        "NARRATOR: Roles delegate access.\nQUIZ: q1\nNOVA: Let's continue.\n", encoding="utf-8"
+    )
+
+    book = parse(path)
+
+    assert book.quiz_checkpoints == {"0.0.0": "q1"}
+    # The QUIZ line itself produces no spoken paragraph/span.
+    assert [p.text for p in book.chapters[0].paragraphs] == [
+        "NARRATOR: Roles delegate access.",
+        "NOVA: Let's continue.",
+    ]
+
+
+def test_parse_quiz_marker_uses_correct_chapter_index(tmp_path: Path) -> None:
+    path = tmp_path / "book.script"
+    path.write_text(
+        "# Chapter One\nNARRATOR: First.\n# Chapter Two\nNARRATOR: Second.\nQUIZ: q2\n",
+        encoding="utf-8",
+    )
+
+    book = parse(path)
+
+    assert book.quiz_checkpoints == {"1.0.0": "q2"}
+
+
+def test_parse_multiple_quiz_markers(tmp_path: Path) -> None:
+    path = tmp_path / "book.script"
+    path.write_text(
+        "NARRATOR: First.\nQUIZ: q1\nNARRATOR: Second.\nQUIZ: q2\n", encoding="utf-8"
+    )
+
+    book = parse(path)
+
+    assert book.quiz_checkpoints == {"0.0.0": "q1", "0.1.0": "q2"}
+
+
+def test_parse_quiz_marker_with_no_preceding_line_in_chapter_raises(tmp_path: Path) -> None:
+    path = tmp_path / "book.script"
+    path.write_text("QUIZ: q1\nNARRATOR: Hello.\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="QUIZ marker has no preceding line"):
+        parse(path)
+
+
+def test_parse_does_not_treat_quiz_as_a_valid_character_name(tmp_path: Path) -> None:
+    # A real character literally named QUIZFOO isn't shadowed by the
+    # reserved QUIZ: directive (different token, "QUIZ:" != "QUIZFOO:").
+    path = tmp_path / "book.script"
+    path.write_text("QUIZFOO: This is fine.\n", encoding="utf-8")
+
+    book = parse(path)
+
+    assert book.chapters[0].paragraphs[0].text == "QUIZFOO: This is fine."
+    assert book.quiz_checkpoints == {}

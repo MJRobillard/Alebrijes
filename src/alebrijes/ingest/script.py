@@ -17,6 +17,12 @@ attribute/script.py. A line starting with a single `#` and a space starts
 a new chapter, Markdown-heading style; content before the first one (if
 any) becomes an implicit first chapter.
 
+A `QUIZ: <id>` line attaches a lesson practice question (by id, looked up
+from a companion `<name>.quiz.yaml` — see `lesson.py`) to the position of
+the line immediately before it. It's a directive, not a speaker — `QUIZ` is
+reserved and can't be used as a character name — and produces no spoken
+span of its own.
+
 This sets `Book.source_format = "script"`, which is what tells
 `cast/build.py` and `render.py` to skip `segment`/`attribute`'s guessing
 entirely and use the exact, deterministic parse instead.
@@ -30,6 +36,7 @@ from pathlib import Path
 from alebrijes.ingest import Book, Chapter, Paragraph
 
 _CHAPTER_RE = re.compile(r"^#\s+(.+)$")
+_QUIZ_RE = re.compile(r"^QUIZ:\s*(\S+)\s*$")
 _LINE_RE = re.compile(r"^[A-Z][A-Z0-9' ]*:")
 
 
@@ -43,6 +50,7 @@ def parse(path: Path) -> Book:
     chapters: list[Chapter] = []
     chapter_title: str | None = None
     paragraphs: list[Paragraph] = []
+    quiz_checkpoints: dict[str, str] = {}
 
     def flush() -> None:
         if not paragraphs:
@@ -62,6 +70,19 @@ def parse(path: Path) -> Book:
             chapter_title = chapter_match.group(1).strip()
             continue
 
+        quiz_match = _QUIZ_RE.match(line)
+        if quiz_match:
+            if not paragraphs:
+                raise ValueError(
+                    f"{path}:{line_number}: QUIZ marker has no preceding line in this chapter to attach to"
+                )
+            # The chapter this paragraph belongs to hasn't been flushed
+            # yet -- `len(chapters)` is exactly the index it'll get when it
+            # is, same span_id scheme as attribute/script.py.
+            span_id = f"{len(chapters)}.{paragraphs[-1].index}.0"
+            quiz_checkpoints[span_id] = quiz_match.group(1)
+            continue
+
         if not _LINE_RE.match(line):
             raise ValueError(
                 f"{path}:{line_number}: expected 'NAME: text' (name in ALL CAPS), got: {line!r}"
@@ -73,4 +94,6 @@ def parse(path: Path) -> Book:
     if not chapters:
         raise ValueError(f"No script lines found in '{path}'.")
 
-    return Book(title=book_title, chapters=chapters, source_format="script")
+    return Book(
+        title=book_title, chapters=chapters, source_format="script", quiz_checkpoints=quiz_checkpoints
+    )

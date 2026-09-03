@@ -32,3 +32,8 @@ class Book:
     # is already explicit in the source, so cast/build.py and render.py skip
     # the guessing entirely -- see attribute/script.py.
     source_format: str = "prose"
+    # span_id -> quiz question id, from ingest/script.py's `QUIZ: <id>`
+    # marker lines. Only ever populated for source_format == "script"; see
+    # lesson.py and session/__init__.py for how these drive LEARNING mode's
+    # interrogation checkpoints.
+    quiz_checkpoints: dict[str, str] = field(default_factory=dict)

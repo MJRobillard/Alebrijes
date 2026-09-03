@@ -15,10 +15,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Callable, Iterator, Optional
 
 import numpy as np
 
+from alebrijes.lesson import QuestionResult, QuizProgress, QuizQuestion, parse_choice, save_progress
+from alebrijes.lesson import load_progress as load_quiz_progress
 from alebrijes.llm.prompts import ChatTurn, Mode as SessionMode, build_messages
 from alebrijes.rag import RagIndex, search as search_rag
 from alebrijes.transcript import Transcript
@@ -63,6 +66,10 @@ class InteractiveSession:
         max_improv_exchanges: int = DEFAULT_MAX_IMPROV_EXCHANGES,
         history_limit: int = DEFAULT_HISTORY_LIMIT,
         top_k: int = DEFAULT_TOP_K,
+        quiz_questions: Optional[dict[str, QuizQuestion]] = None,
+        quiz_checkpoints: Optional[dict[str, str]] = None,
+        quiz_progress_path: Optional[Path] = None,
+        coffee_premise: str = "",
     ) -> None:
         self.book_title = book_title
         self.character_voice = character_voice
@@ -73,6 +80,23 @@ class InteractiveSession:
         self.max_improv_exchanges = max_improv_exchanges
         self.history_limit = history_limit
         self.top_k = top_k
+
+        # Lesson mode: authored practice questions (quiz_checkpoints maps a
+        # checkpoint's span_id -> question id in quiz_questions -- see
+        # ingest/script.py's `QUIZ:` marker and lesson.py), a persisted
+        # running score, and a free-form premise document that grounds
+        # CYOA ("coffee mode") improvisation. All optional -- a session with
+        # none of this behaves exactly as before lesson mode existed.
+        self.quiz_questions = quiz_questions or {}
+        self.quiz_checkpoints = quiz_checkpoints or {}
+        self.quiz_progress_path = quiz_progress_path
+        self.quiz_progress: QuizProgress = (
+            load_quiz_progress(quiz_progress_path, book_title=book_title)
+            if quiz_progress_path is not None
+            else QuizProgress(book_title=book_title)
+        )
+        self.coffee_premise = coffee_premise
+        self.awaiting_quiz_question: Optional[QuizQuestion] = None
 
         self._embed_fn = embed_fn
         self._chat_stream_fn = chat_stream_fn
@@ -126,6 +150,15 @@ class InteractiveSession:
             return None
 
         self.state = SessionState.PAUSED_FOR_USER
+
+        question_id = self.quiz_checkpoints.get(span_id) if self.mode is SessionMode.LEARNING else None
+        question = self.quiz_questions.get(question_id) if question_id else None
+        if question is not None:
+            self.awaiting_quiz_question = question
+            pause_message = self._format_quiz_prompt(question)
+        else:
+            pause_message = "(narration has reached a pause point)"
+
         hits = self._retrieve("what has just happened in the story")
         messages = build_messages(
             mode=self.mode,
@@ -134,7 +167,7 @@ class InteractiveSession:
             position_summary=self._position_summary(),
             rag_excerpts=[hit.entry.text for hit in hits],
             history=self.history[-self.history_limit :],
-            user_message="(narration has reached a pause point)",
+            user_message=pause_message,
         )
         chunks: list[str] = []
         for delta in self._chat_stream_fn(messages):
@@ -145,6 +178,44 @@ class InteractiveSession:
         self.history.append(ChatTurn(role="assistant", content=prompt_text))
         self.history = self.history[-self.history_limit :]
         return SessionEvent(kind="awaiting_input", text=prompt_text)
+
+    @staticmethod
+    def _format_quiz_prompt(question: QuizQuestion) -> str:
+        options_block = "\n".join(f"{key}) {text}" for key, text in question.options.items())
+        return (
+            "(quiz checkpoint) Ask the listener this exact question in character, "
+            "then wait for their A/B/C/D answer -- do not paraphrase or invent a "
+            f"different question:\n{question.prompt}\n{options_block}"
+        )
+
+    def _grade_quiz_answer(self, choice: str) -> str:
+        """Grades `choice` against the pending question, updates and
+        persists `quiz_progress`, clears `awaiting_quiz_question`, and
+        returns a note describing the result for the LLM to react to (the
+        grade itself is decided here, deterministically -- the LLM never
+        judges correctness, only reacts to it; see narrator_guidelines.md's
+        existing "react to what they actually said" rule)."""
+        question = self.awaiting_quiz_question
+        assert question is not None
+        is_correct = choice == question.correct
+
+        prior = self.quiz_progress.answered.get(question.id)
+        attempts = (prior.attempts if prior else 0) + 1
+        self.quiz_progress.answered[question.id] = QuestionResult(
+            correct=is_correct, attempts=attempts, last_answer=choice
+        )
+        if self.quiz_progress_path is not None:
+            save_progress(self.quiz_progress, self.quiz_progress_path)
+        self.awaiting_quiz_question = None
+
+        if is_correct:
+            return f"(the listener answered {choice}, which is correct. React in character.)"
+        correct_text = question.options.get(question.correct, "")
+        return (
+            f"(the listener answered {choice}, which is incorrect -- the correct "
+            f"answer was {question.correct}) {correct_text}. React in character to "
+            "their specific answer, gently correcting the misconception.)"
+        )
 
     def handle_user_message(
         self, user_message: str, *, on_delta: Optional[Callable[[str], None]] = None
@@ -158,11 +229,25 @@ class InteractiveSession:
         `SessionEvent` this returns.
         """
         self.state = SessionState.GENERATING_RESPONSE
+
+        # A pending quiz question takes priority over a normal LLM turn --
+        # but only if the message actually parses as a choice; free text
+        # while a question is pending falls through to the normal flow
+        # below rather than forcing a grade on an unrelated message.
+        effective_message = user_message
+        if self.awaiting_quiz_question is not None:
+            choice = parse_choice(user_message)
+            if choice is not None:
+                effective_message = self._grade_quiz_answer(choice)
+
         hits = self._retrieve(user_message)
         rag_excerpts = [hit.entry.text for hit in hits]
         sources = [hit.entry.span_id for hit in hits]
 
         if self.mode is SessionMode.CYOA:
+            if self.coffee_premise:
+                rag_excerpts = [self.coffee_premise] + rag_excerpts
+
             self.improv_exchange_count += 1
             if self.improv_exchange_count >= self.max_improv_exchanges:
                 upcoming = self._retrieve(user_message, max_seq=len(self.transcript.spans) - 1)
@@ -177,7 +262,7 @@ class InteractiveSession:
             position_summary=self._position_summary(),
             rag_excerpts=rag_excerpts,
             history=self.history[-self.history_limit :],
-            user_message=user_message,
+            user_message=effective_message,
         )
         chunks: list[str] = []
         for delta in self._chat_stream_fn(messages):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from alebrijes.lesson import QuizProgress, QuizQuestion
 from alebrijes.rag import RagEntry, RagIndex
 from alebrijes.segment import SpanKind
 from alebrijes.session import InteractiveSession, SessionMode, SessionState
@@ -211,3 +212,203 @@ def test_history_is_capped_to_history_limit() -> None:
 
     assert len(session.history) == 2
     assert session.history[-1].content == "canned response"
+
+
+# --- lesson mode: quiz checkpoints, deterministic grading, coffee premise ---
+
+
+def _quiz_question() -> QuizQuestion:
+    return QuizQuestion(
+        id="q1",
+        prompt="What is an IAM role?",
+        options={"A": "A user", "B": "A delegated identity"},
+        correct="B",
+    )
+
+
+def test_learning_checkpoint_with_attached_question_sets_awaiting_quiz_question() -> None:
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+    )
+
+    event = session.advance_position("0.2.0")
+
+    assert session.awaiting_quiz_question is not None
+    assert session.awaiting_quiz_question.id == "q1"
+    assert event.kind == "awaiting_input"
+
+
+def test_learning_checkpoint_prompt_includes_exact_question_and_options() -> None:
+    calls = []
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+        chat_calls=calls,
+    )
+
+    session.advance_position("0.2.0")
+
+    prompt_sent = calls[0][-1]["content"]
+    assert "What is an IAM role?" in prompt_sent
+    assert "A) A user" in prompt_sent
+    assert "B) A delegated identity" in prompt_sent
+
+
+def test_checkpoint_without_attached_question_behaves_as_before() -> None:
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={},  # no question attached
+        quiz_questions={"q1": _quiz_question()},
+    )
+
+    session.advance_position("0.2.0")
+
+    assert session.awaiting_quiz_question is None
+
+
+def test_correct_choice_grades_correct_and_clears_pending_question() -> None:
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+    )
+    session.advance_position("0.2.0")
+
+    session.handle_user_message("B")
+
+    assert session.awaiting_quiz_question is None
+    assert session.quiz_progress.answered["q1"].correct is True
+    assert session.quiz_progress.answered["q1"].last_answer == "B"
+    assert session.quiz_progress.score == (1, 1)
+
+
+def test_incorrect_choice_grades_incorrect() -> None:
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+    )
+    session.advance_position("0.2.0")
+
+    session.handle_user_message("A")
+
+    assert session.quiz_progress.answered["q1"].correct is False
+    assert session.quiz_progress.score == (0, 1)
+
+
+def test_grading_note_not_raw_user_text_is_sent_to_the_llm() -> None:
+    calls = []
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+        chat_calls=calls,
+    )
+    session.advance_position("0.2.0")
+    calls.clear()
+
+    session.handle_user_message("I think B")
+
+    prompt_sent = calls[0][-1]["content"]
+    assert prompt_sent != "I think B"
+    assert "correct" in prompt_sent.lower()
+    # The raw text the listener actually said is still what's recorded in history.
+    assert session.history[-2].content == "I think B"
+
+
+def test_unparseable_answer_leaves_question_pending() -> None:
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+    )
+    session.advance_position("0.2.0")
+
+    session.handle_user_message("I'm not sure, can you repeat that?")
+
+    assert session.awaiting_quiz_question is not None
+    assert session.quiz_progress.answered == {}
+
+
+def test_quiz_progress_persists_to_disk_when_path_given(tmp_path) -> None:
+    progress_path = tmp_path / "book.progress.json"
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+        quiz_progress_path=progress_path,
+    )
+    session.advance_position("0.2.0")
+
+    session.handle_user_message("B")
+
+    assert progress_path.exists()
+    from alebrijes.lesson import load_progress
+
+    reloaded = load_progress(progress_path)
+    assert reloaded.answered["q1"].correct is True
+
+
+def test_quiz_progress_loads_existing_score_at_construction(tmp_path) -> None:
+    from alebrijes.lesson import QuestionResult, save_progress
+
+    progress_path = tmp_path / "book.progress.json"
+    save_progress(
+        QuizProgress(book_title="Fixture Book", answered={"q0": QuestionResult(True, 1, "A")}),
+        progress_path,
+    )
+
+    session = _session(quiz_progress_path=progress_path)
+
+    assert session.quiz_progress.score == (1, 1)
+
+
+def test_repeated_attempts_increment_attempts_not_double_count_naively() -> None:
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0", "0.3.0"],
+        quiz_checkpoints={"0.2.0": "q1", "0.3.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+    )
+    session.advance_position("0.2.0")
+    session.handle_user_message("A")  # wrong, attempt 1
+
+    session.advance_position("0.3.0")  # same question triggered again
+    session.handle_user_message("B")  # right, attempt 2
+
+    assert session.quiz_progress.answered["q1"].attempts == 2
+    assert session.quiz_progress.answered["q1"].correct is True
+    assert session.quiz_progress.score == (1, 1)  # one question, currently correct
+
+
+def test_cyoa_includes_coffee_premise_in_prompt() -> None:
+    calls = []
+    session = _session(
+        mode=SessionMode.CYOA,
+        coffee_premise="A mysterious fog rolls into town.",
+        chat_calls=calls,
+    )
+
+    session.handle_user_message("I investigate the fog.")
+
+    assert "A mysterious fog rolls into town." in calls[0][0]["content"]  # system prompt carries rag_excerpts
+
+
+def test_qa_mode_does_not_include_coffee_premise() -> None:
+    calls = []
+    session = _session(mode=SessionMode.QA, coffee_premise="A mysterious fog.", chat_calls=calls)
+
+    session.handle_user_message("who is Colin?")
+
+    assert "A mysterious fog." not in calls[0][0]["content"]
