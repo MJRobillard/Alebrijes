@@ -19,25 +19,9 @@ _DEFAULT_VOICES_DIR = Config().voices_dir
 
 
 def _ingest_book(book_path: Path):
-    """Parses `book_path` with the ingest module for its extension.
+    from alebrijes.ingest import parse_book
 
-    Kept in one place so `cast` and `render` support exactly the same set of
-    formats and fail the same way on an unsupported one.
-    """
-    suffix = book_path.suffix.lower()
-    if suffix == ".epub":
-        from alebrijes.ingest.epub import parse
-    elif suffix == ".pdf":
-        from alebrijes.ingest.pdf import parse
-    elif suffix == ".txt":
-        from alebrijes.ingest.txt import parse
-    elif suffix == ".script":
-        from alebrijes.ingest.script import parse
-    else:
-        raise NotImplementedError(
-            f"Ingest for '{suffix}' files is not supported. Supported formats: .epub, .pdf, .txt, .script."
-        )
-    return parse(book_path)
+    return parse_book(book_path)
 
 
 def _cmd_gui(args: argparse.Namespace) -> int:

@@ -334,21 +334,9 @@ def _default_import_voice(source_path: Path, name: str, voices_dir: Path) -> Pat
 
 
 def _default_ingest_book(book_path: Path) -> Book:
-    # Local import: mirrors alebrijes.cli._ingest_book's dispatch-by-extension,
-    # duplicated rather than imported from cli.py to avoid a server->cli
-    # dependency for what's a small, stable piece of logic.
-    suffix = book_path.suffix.lower()
-    if suffix == ".epub":
-        from alebrijes.ingest.epub import parse
-    elif suffix == ".pdf":
-        from alebrijes.ingest.pdf import parse
-    elif suffix == ".txt":
-        from alebrijes.ingest.txt import parse
-    elif suffix == ".script":
-        from alebrijes.ingest.script import parse
-    else:
-        raise NotImplementedError(f"Ingest for '{suffix}' files is not supported.")
-    return parse(book_path)
+    from alebrijes.ingest import parse_book
+
+    return parse_book(book_path)
 
 
 def create_app(

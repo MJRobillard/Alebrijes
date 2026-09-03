@@ -40,6 +40,32 @@ _QUIZ_RE = re.compile(r"^QUIZ:\s*(\S+)\s*$")
 _LINE_RE = re.compile(r"^[A-Z][A-Z0-9' ]*:")
 
 
+def looks_like_script(raw: str) -> bool:
+    """Sniffs whether `raw` is already in this module's strict `NAME: text`
+    format, so a `.txt` file that happens to be written that way (see
+    `ingest/__init__.py:parse_book`) can be routed here instead of to
+    `ingest/txt.py`'s prose parser, which would otherwise leave every
+    `NAME:` prefix sitting unparsed inside narration text.
+
+    Every non-blank line must match a script line (`NAME: text`), a chapter
+    heading, or a `QUIZ:` marker -- and at least one actual script line must
+    be present, so an ordinary prose file with a stray all-caps word isn't
+    misdetected.
+    """
+    saw_line = False
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _CHAPTER_RE.match(line) or _QUIZ_RE.match(line):
+            continue
+        if _LINE_RE.match(line):
+            saw_line = True
+            continue
+        return False
+    return saw_line
+
+
 def parse(path: Path) -> Book:
     if not path.exists():
         raise FileNotFoundError(f"Script file not found: {path}")

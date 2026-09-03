@@ -4,7 +4,27 @@ from pathlib import Path
 
 import pytest
 
-from alebrijes.ingest.script import parse
+from alebrijes.ingest.script import looks_like_script, parse
+
+
+def test_looks_like_script_true_for_all_name_colon_lines() -> None:
+    assert looks_like_script("FELICITY: Hello.\nSARA: Hi yourself.\n")
+
+
+def test_looks_like_script_true_with_chapter_and_quiz_markers() -> None:
+    assert looks_like_script("# Chapter One\nNARRATOR: It began.\nQUIZ: q1\nCOLIN: Let's go.\n")
+
+
+def test_looks_like_script_false_for_ordinary_prose() -> None:
+    assert not looks_like_script('The room was quiet. "Hello," Colin said.\n')
+
+
+def test_looks_like_script_false_for_mixed_content() -> None:
+    assert not looks_like_script("FELICITY: Hello.\nThen everyone went home.\n")
+
+
+def test_looks_like_script_false_when_empty() -> None:
+    assert not looks_like_script("\n\n")
 
 
 def test_parse_sets_script_source_format(tmp_path: Path) -> None:
