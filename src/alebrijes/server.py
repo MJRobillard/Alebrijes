@@ -1083,58 +1083,88 @@ def create_app(
             # own try/except WebSocketDisconnect -- an uncaught
             # WebSocketDisconnect from _send would just be logged as a
             # never-retrieved task exception instead of ending quietly.
+            import queue as queue_module
+
+            async def _handle_chapter_audio(chapter_audio) -> bool:
+                """Returns False when the stream is done (the None
+                sentinel, or a render error) and the caller should stop."""
+                if chapter_audio is None:
+                    return False
+                if isinstance(chapter_audio, _ChapterRenderError):
+                    await _send(
+                        {
+                            "type": "error",
+                            "detail": f"Chapter {chapter_audio.chapter_index + 1} failed to render: {chapter_audio.exc}",
+                        }
+                    )
+                    return False
+                interactive_session.extend_transcript(chapter_audio.timings)
+
+                # Fire all of this chapter's checkpoint responses off
+                # concurrently (one thread each) the moment the chapter is
+                # available -- by the time playback actually reaches one,
+                # InteractiveSession.prefetch_checkpoint has usually
+                # already cached its (LLM-latency-bound) response, so
+                # advance_position doesn't have to wait on it live.
+                # Tracked so a disconnect cancels any still running rather
+                # than leaving them to finish unused.
+                for t in chapter_audio.timings:
+                    if t.span_id in interactive_session.checkpoints:
+                        prefetch_tasks.append(
+                            asyncio.create_task(run_in_threadpool(interactive_session.prefetch_checkpoint, t.span_id))
+                        )
+
+                wav_bytes = _audio_to_wav_bytes(chapter_audio.sample_rate, chapter_audio.audio)
+                await _send(
+                    {
+                        "type": "chapter_ready",
+                        "chapter_index": chapter_audio.chapter_index,
+                        "title": chapter_audio.title,
+                        "sample_rate": chapter_audio.sample_rate,
+                        "data": base64.b64encode(wav_bytes).decode("ascii"),
+                        "spans": [
+                            {
+                                "span_id": t.span_id,
+                                "chapter_index": t.chapter_index,
+                                "paragraph_index": t.paragraph_index,
+                                "character": t.character,
+                                "kind": t.kind.name,
+                                "text": t.text,
+                                "start_ms": t.start_ms,
+                                "end_ms": t.end_ms,
+                            }
+                            for t in chapter_audio.timings
+                        ],
+                    }
+                )
+                return True
+
             try:
                 while True:
                     chapter_audio = await run_in_threadpool(chapter_queue.get)
-                    if chapter_audio is None:
+                    if not await _handle_chapter_audio(chapter_audio):
                         return
-                    if isinstance(chapter_audio, _ChapterRenderError):
-                        await _send(
-                            {
-                                "type": "error",
-                                "detail": f"Chapter {chapter_audio.chapter_index + 1} failed to render: {chapter_audio.exc}",
-                            }
-                        )
+
+                    # Look ahead once: LookaheadRenderer stays up to
+                    # lookahead_chapters ahead of *playback consumption*
+                    # (mark_consumed, reported only once a chapter finishes
+                    # playing), not ahead of this drain loop -- so by the
+                    # time we've sent one chapter, the next one is often
+                    # already sitting fully rendered in the queue too.
+                    # get_nowait() grabs it (and, in particular, kicks off
+                    # its checkpoint prefetch) immediately instead of
+                    # waiting for this loop's next blocking get() to get
+                    # around to it -- a real head start for the LLM
+                    # round-trip a live checkpoint there is racing against.
+                    # Only one extra chapter, not a drain-everything-ready
+                    # loop: further chapters get the same treatment on
+                    # their own turn through this same loop.
+                    try:
+                        next_chapter_audio = chapter_queue.get_nowait()
+                    except queue_module.Empty:
+                        continue
+                    if not await _handle_chapter_audio(next_chapter_audio):
                         return
-                    interactive_session.extend_transcript(chapter_audio.timings)
-
-                    # Fire all of this chapter's checkpoint responses off
-                    # concurrently (one thread each) the moment the chapter
-                    # is available -- by the time playback actually reaches
-                    # one, InteractiveSession.prefetch_checkpoint has
-                    # usually already cached its (LLM-latency-bound)
-                    # response, so advance_position doesn't have to wait on
-                    # it live. Tracked so a disconnect cancels any still
-                    # running rather than leaving them to finish unused.
-                    for t in chapter_audio.timings:
-                        if t.span_id in interactive_session.checkpoints:
-                            prefetch_tasks.append(
-                                asyncio.create_task(run_in_threadpool(interactive_session.prefetch_checkpoint, t.span_id))
-                            )
-
-                    wav_bytes = _audio_to_wav_bytes(chapter_audio.sample_rate, chapter_audio.audio)
-                    await _send(
-                        {
-                            "type": "chapter_ready",
-                            "chapter_index": chapter_audio.chapter_index,
-                            "title": chapter_audio.title,
-                            "sample_rate": chapter_audio.sample_rate,
-                            "data": base64.b64encode(wav_bytes).decode("ascii"),
-                            "spans": [
-                                {
-                                    "span_id": t.span_id,
-                                    "chapter_index": t.chapter_index,
-                                    "paragraph_index": t.paragraph_index,
-                                    "character": t.character,
-                                    "kind": t.kind.name,
-                                    "text": t.text,
-                                    "start_ms": t.start_ms,
-                                    "end_ms": t.end_ms,
-                                }
-                                for t in chapter_audio.timings
-                            ],
-                        }
-                    )
             except WebSocketDisconnect:
                 return
 

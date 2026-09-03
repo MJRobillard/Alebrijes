@@ -1446,6 +1446,86 @@ def test_session_ws_live_prefetches_checkpoint_response_before_position_reaches_
     assert len(calls) == 1  # advance_position reused the cached response, no second LLM call
 
 
+def _fixture_script_book_two_chapters_with_quiz() -> Book:
+    return Book(
+        title="Fixture Lesson",
+        source_format="script",
+        quiz_checkpoints={"0.0.0": "q1", "1.0.0": "q2"},
+        chapters=[
+            Chapter(title="One", index=0, paragraphs=[Paragraph(text="NARRATOR: Roles delegate access.", index=0)]),
+            Chapter(title="Two", index=1, paragraphs=[Paragraph(text="NARRATOR: Policies grant permissions.", index=0)]),
+        ],
+    )
+
+
+def _write_two_question_quiz_file(tmp_path: Path) -> Path:
+    quiz_path = tmp_path / "book.quiz.yaml"
+    quiz_path.write_text(
+        "questions:\n"
+        "  q1:\n"
+        "    prompt: \"What is an IAM role?\"\n"
+        "    options:\n"
+        "      A: \"A user\"\n"
+        "      B: \"A delegated identity\"\n"
+        "    correct: B\n"
+        "  q2:\n"
+        "    prompt: \"What does a policy do?\"\n"
+        "    options:\n"
+        "      A: \"Grants permissions\"\n"
+        "      B: \"Deletes users\"\n"
+        "    correct: A\n",
+        encoding="utf-8",
+    )
+    return quiz_path
+
+
+def test_session_ws_live_looks_ahead_one_chapter_to_prefetch_its_checkpoint_too(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture Lesson", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
+    quiz_path = _write_two_question_quiz_file(tmp_path)
+
+    calls = []
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        calls.append(messages)
+        yield "a question"
+
+    client = _client(
+        ingest_book=lambda path: _fixture_script_book_two_chapters_with_quiz(),
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=chat_stream_fn,
+        build_render_pipeline_fn=_fake_build_render_pipeline,
+    )
+    start = client.post(
+        "/api/session/start_live",
+        headers=_headers(),
+        json={
+            "book": "unused.script",
+            "cast": str(cast_path),
+            "mode": "learning",
+            "lookahead_chapters": 5,  # both chapters render well ahead of any playback/consumption
+            "quiz_path": str(quiz_path),
+        },
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        # Both chapters are tiny (one line each) and the fake render
+        # pipeline is instant, so by the time _drain_chapters starts
+        # draining, both are typically already queued -- the look-ahead
+        # peek should grab chapter 1 in the same pass as chapter 0,
+        # without needing a "chapter_consumed" round trip first.
+        first = _receive_skipping_progress(ws)
+        second = _receive_skipping_progress(ws)
+        assert {first["chapter_index"], second["chapter_index"]} == {0, 1}
+
+        # Give both prefetch threads a moment to land.
+        deadline = time.time() + 2
+        while len(calls) < 2 and time.time() < deadline:
+            time.sleep(0.02)
+        assert len(calls) == 2  # both chapters' checkpoints prefetched, no "position" sent yet
+
+
 def test_session_start_live_without_quiz_path_has_no_choices_on_checkpoint(tmp_path: Path) -> None:
     cast_path = tmp_path / "book.cast.yaml"
     save_cast(CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
