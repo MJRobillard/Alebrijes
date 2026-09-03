@@ -571,7 +571,15 @@
   // A small sequential-playback queue factory -- used for both the
   // existing session's response audio and (separately) the live lesson
   // flow's interrupt-response audio, each against its own <audio> element.
-  function makeAudioQueuePlayer(playerEl) {
+  function makeAudioQueuePlayer(playerEl, onIdle) {
+    // onIdle fires every time playback drains to empty -- including
+    // transient gaps *between* chunks of one still-streaming response,
+    // not just once a whole response is done. Callers that need "this
+    // specific response's audio has fully finished playing" (not just
+    // "nothing queued right now") must pair this with their own
+    // is-the-response-actually-complete signal (e.g. the final "answer"
+    // websocket message) -- see the answer handlers below, which resume
+    // main narration only once both have happened.
     const queue = [];
     let playing = false;
 
@@ -579,6 +587,7 @@
       const next = queue.shift();
       if (next === undefined) {
         playing = false;
+        if (onIdle) onIdle();
         return;
       }
       playing = true;
@@ -593,29 +602,24 @@
         queue.push(base64Wav);
         if (!playing) playNext();
       },
+      isIdle: function () {
+        return !playing && queue.length === 0;
+      },
     };
   }
 
-  const audioQueue = [];
-  let playingQueue = false;
-
-  function queueResponseAudio(base64Wav) {
-    audioQueue.push(base64Wav);
-    if (!playingQueue) playNextQueuedAudio();
-  }
-
-  function playNextQueuedAudio() {
-    const next = audioQueue.shift();
-    if (next === undefined) {
-      playingQueue = false;
-      return;
+  // Set once the final "answer"/"awaiting_input" message for the current
+  // response has arrived but its queued audio (responseAudioPlayer) is
+  // still playing -- main narration (player) only resumes once *both*
+  // are true, checked in the "answer" handler below and in this onIdle
+  // callback (whichever happens second).
+  let sessionResponseAudioPending = false;
+  const responseAudioPlayer = makeAudioQueuePlayer(responsePlayer, function () {
+    if (sessionResponseAudioPending) {
+      sessionResponseAudioPending = false;
+      if (player.paused) player.play();
     }
-    playingQueue = true;
-    responsePlayer.src = "data:audio/wav;base64," + next;
-    responsePlayer.play();
-  }
-
-  responsePlayer.addEventListener("ended", playNextQueuedAudio);
+  });
 
   startSessionBtn.addEventListener("click", function () {
     if (!state.audioPath || !state.castPath) {
@@ -659,6 +663,7 @@
       wsProtocol + "//" + window.location.host + "/api/session/" + sessionId + "/ws?token=" + encodeURIComponent(token)
     );
     state.session = { ws: ws, id: sessionId, spoken: spoken };
+    sessionResponseAudioPending = false;
 
     ws.addEventListener("message", function (evt) {
       const message = JSON.parse(evt.data);
@@ -667,9 +672,19 @@
         chatInput.disabled = false;
         chatSendBtn.disabled = false;
         // A checkpoint/quiz reaction pauses narration (awaiting_input,
-        // below) until answered -- resume it now that a reply landed. A
-        // plain QA-mode question never paused it, so this is a no-op then.
-        if (player.paused) player.play();
+        // below) until answered -- resume it now that a reply landed, but
+        // only once its queued audio (responseAudioPlayer) has actually
+        // finished playing, not the instant this message arrives -- the
+        // server sends this only after every audio_chunk, but the client
+        // still has to play that queued audio in real time, so resuming
+        // main narration right away would talk over the tail of the
+        // response. A plain QA-mode question never paused narration, so
+        // this is a no-op then either way.
+        if (responseAudioPlayer.isIdle()) {
+          if (player.paused) player.play();
+        } else {
+          sessionResponseAudioPending = true;
+        }
       } else if (message.type === "awaiting_input") {
         player.pause();
         appendChatTurn("narrator", message.text);
@@ -678,7 +693,7 @@
         chatInput.focus();
       } else if (message.type === "audio_chunk") {
         if (message.text) appendChatTurn("live", message.character + ": " + message.text);
-        queueResponseAudio(message.data);
+        responseAudioPlayer.push(message.data);
       } else if (message.type === "error") {
         appendChatTurn("narrator", "Error: " + message.detail);
         chatInput.disabled = false;
@@ -800,7 +815,17 @@
   const lessonChatRow = document.getElementById("lesson-chat-row");
   const lessonChatInput = document.getElementById("lesson-chat-input");
   const lessonChatSendBtn = document.getElementById("lesson-chat-send-btn");
-  const lessonResponsePlayer = makeAudioQueuePlayer(document.getElementById("lesson-response-player"));
+  // Same pairing as sessionResponseAudioPending/responseAudioPlayer above --
+  // resume main narration (lessonPlayer) only once both the final message
+  // for this response has arrived *and* its queued audio has finished
+  // playing, not just whichever happens first.
+  let lessonResponseAudioPending = false;
+  const lessonResponsePlayer = makeAudioQueuePlayer(document.getElementById("lesson-response-player"), function () {
+    if (lessonResponseAudioPending) {
+      lessonResponseAudioPending = false;
+      if (lessonPlayer.paused) lessonPlayer.play();
+    }
+  });
 
   const lessonState = {
     ws: null,
@@ -897,6 +922,7 @@
       lessonState.currentChapterIndex = null;
       lessonState.currentChapterSpans = [];
       lessonState.currentSpanId = null;
+      lessonResponseAudioPending = false;
       lessonBookTitleEl.textContent = result.book_title || "";
       lessonTranscriptEl.innerHTML = "";
       lessonChatLog.innerHTML = "";
@@ -955,10 +981,18 @@
         lessonChatSendBtn.disabled = false;
         refreshLessonScore();
         // A checkpoint/quiz question pauses narration (awaiting_input,
-        // above) until answered -- resume it now that a reply landed. A
-        // plain question typed mid-narration never paused it, so this is
-        // a no-op then.
-        if (lessonPlayer.paused) lessonPlayer.play();
+        // above) until answered -- resume it now that a reply landed, but
+        // only once its queued audio (lessonResponsePlayer) has actually
+        // finished playing, not the instant this message arrives (the
+        // client still has to play that queued audio in real time; resuming
+        // right away would talk over the tail of the response). A plain
+        // question typed mid-narration never paused it, so this is a no-op
+        // then either way.
+        if (lessonResponsePlayer.isIdle()) {
+          if (lessonPlayer.paused) lessonPlayer.play();
+        } else {
+          lessonResponseAudioPending = true;
+        }
       } else if (message.type === "audio_chunk") {
         // The first chunk of a live LLM response is the earliest signal
         // that the wait is over and something is actually coming back --
