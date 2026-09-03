@@ -25,6 +25,9 @@ _BOOK_FILE_TYPES = ("Book files (*.epub;*.pdf;*.txt;*.script)", "All files (*.*)
 _VOICE_FILE_TYPES = ("Voice state files (*.pt;*.safetensors)", "All files (*.*)")
 _AUDIO_FILE_TYPES = ("Rendered audiobooks (*.m4b)", "All files (*.*)")
 _CAST_FILE_TYPES = ("Cast files (*.cast.yaml)", "All files (*.*)")
+_SCRIPT_FILE_TYPES = ("Script files (*.script;*.txt)", "All files (*.*)")
+_QUIZ_FILE_TYPES = ("Quiz files (*.quiz.yaml)", "All files (*.*)")
+_COFFEE_FILE_TYPES = ("Coffee premise files (*.coffee.md)", "All files (*.*)")
 
 
 class FileApi:
@@ -41,6 +44,15 @@ class FileApi:
 
     def pick_cast_file(self) -> Optional[str]:
         return self._pick(_CAST_FILE_TYPES)
+
+    def pick_script_file(self) -> Optional[str]:
+        return self._pick(_SCRIPT_FILE_TYPES)
+
+    def pick_quiz_file(self) -> Optional[str]:
+        return self._pick(_QUIZ_FILE_TYPES)
+
+    def pick_coffee_file(self) -> Optional[str]:
+        return self._pick(_COFFEE_FILE_TYPES)
 
     def _pick(self, file_types: tuple[str, ...]) -> Optional[str]:
         import webview

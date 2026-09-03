@@ -28,6 +28,28 @@ def test_build_cast_file_includes_narrator_and_detected_characters() -> None:
     assert all(entry.voice_state_path for entry in result.cast_file.entries)
 
 
+def test_build_cast_file_does_not_duplicate_narrator_for_script_format() -> None:
+    # A script with an explicit NARRATOR: line produces an
+    # Attribution(character="Narrator", ...) alongside the other characters
+    # -- NARRATOR must not also get added via the generic characters-seen
+    # accumulation on top of its hardcoded first entry.
+    chapter = Chapter(
+        title="Chapter One",
+        index=0,
+        paragraphs=[
+            Paragraph(text="NARRATOR: It began.", index=0),
+            Paragraph(text="FELICITY: Hello.", index=1),
+            Paragraph(text="NARRATOR: And so it continued.", index=2),
+        ],
+    )
+    book = Book(title="Fixture Book", chapters=[chapter], source_format="script")
+
+    result = build_cast_file(book)
+
+    names = [entry.character for entry in result.cast_file.entries]
+    assert names == [NARRATOR, "Felicity"]
+
+
 def test_build_cast_file_reports_low_confidence_attributions() -> None:
     # The 4th line has no speech verb and no named character nearby, so it can
     # only be resolved (if at all) by the low-confidence alternation fallback

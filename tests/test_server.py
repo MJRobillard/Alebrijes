@@ -51,7 +51,7 @@ def test_llm_models_returns_names_and_default() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["models"] == ["hermes3:8b", "deepseek-r1:1.5b"]
+    assert body["models"] == ["local", "hermes3:8b", "deepseek-r1:1.5b"]
     assert body["default"]  # hermes3:8b unless ALEBRIJES_CHAT_MODEL is set
 
 
@@ -779,6 +779,30 @@ def test_session_start_with_chat_model_pins_it_for_that_sessions_chat_calls(tmp_
         ws.receive_json()
 
     assert seen_models == ["deepseek-r1:1.5b"]
+
+
+def test_pin_chat_model_local_routes_to_scripter_client_ignoring_chat_stream_fn(monkeypatch) -> None:
+    from alebrijes.server import _pin_chat_model
+
+    class _FakeScripterClient:
+        def __init__(self):
+            self.messages_seen = None
+
+        def chat_stream(self, messages, *, model="local"):
+            self.messages_seen = messages
+            yield "reply from scripter"
+
+    fake_client = _FakeScripterClient()
+    monkeypatch.setattr("alebrijes.llm.scripter.ScripterClient", lambda: fake_client)
+
+    def _unused_chat_stream_fn(messages, *, model=None):
+        raise AssertionError("should not be called when model is 'local'")
+
+    pinned = _pin_chat_model(_unused_chat_stream_fn, "local")
+    result = list(pinned([{"role": "user", "content": "hi"}]))
+
+    assert result == ["reply from scripter"]
+    assert fake_client.messages_seen == [{"role": "user", "content": "hi"}]
 
 
 def test_session_start_with_max_improv_exchanges_pins_cyoa_steer_back_timing(tmp_path: Path) -> None:

@@ -143,3 +143,28 @@ def test_synthesis_error_is_captured_not_raised_in_background_thread() -> None:
         assert "synthesis exploded" in str(renderer.error)
     finally:
         renderer.stop()
+
+
+def test_synthesis_error_invokes_on_error_with_failing_chapter_index() -> None:
+    def _raising_synthesize(voiced_spans, voice_states, agent, pause_ms=250):
+        raise RuntimeError("synthesis exploded")
+
+    errors: list[tuple[int, Exception]] = []
+    renderer = LookaheadRenderer(
+        _book(2),
+        CastFile(book_title="Fixture"),
+        voice_states={},
+        agent=_FakeAgent(),
+        lookahead_chapters=5,
+        resolve_chapter_spans_fn=_fake_resolve,
+        synthesize_chapter_fn=_raising_synthesize,
+        on_error=lambda chapter_index, exc: errors.append((chapter_index, exc)),
+    )
+    try:
+        renderer.start()
+        assert _wait_until(lambda: len(errors) == 1)
+        chapter_index, exc = errors[0]
+        assert chapter_index == 0
+        assert "synthesis exploded" in str(exc)
+    finally:
+        renderer.stop()

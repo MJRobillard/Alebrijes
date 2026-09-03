@@ -178,20 +178,25 @@
   <section id="lesson-section">
     <h2>Start a Lesson (live)</h2>
     <p class="hint">
-      Point at a script (.script) and, optionally, a quiz file (.quiz.yaml) and a
-      coffee/mystery premise (.coffee.md). No pre-rendering needed — audio is
-      synthesized as the lesson plays.
+      Point at a script (.script) and, optionally, a cast file (.cast.yaml — left
+      blank, one is built from the script on the fly), a quiz file (.quiz.yaml),
+      and a coffee/mystery premise (.coffee.md). No pre-rendering needed — audio
+      is synthesized as the lesson plays.
     </p>
     <div class="row">
+      <button id="lesson-choose-script-btn" hidden>Choose Script…</button>
       <input type="text" id="lesson-script-input" placeholder="/path/to/script.script" style="flex: 1;">
     </div>
     <div class="row" style="margin-top: 0.4rem;">
-      <input type="text" id="lesson-cast-input" placeholder="/path/to/book.cast.yaml" style="flex: 1;">
+      <button id="lesson-choose-cast-btn" hidden>Choose Cast…</button>
+      <input type="text" id="lesson-cast-input" placeholder="/path/to/book.cast.yaml (optional — built from the script if omitted)" style="flex: 1;">
     </div>
     <div class="row" style="margin-top: 0.4rem;">
+      <button id="lesson-choose-quiz-btn" hidden>Choose Quiz…</button>
       <input type="text" id="lesson-quiz-input" placeholder="/path/to/book.quiz.yaml (optional)" style="flex: 1;">
     </div>
     <div class="row" style="margin-top: 0.4rem;">
+      <button id="lesson-choose-coffee-btn" hidden>Choose Coffee Premise…</button>
       <input type="text" id="lesson-coffee-input" placeholder="/path/to/book.coffee.md (optional)" style="flex: 1;">
     </div>
     <div class="row" style="margin-top: 0.6rem;">
@@ -303,6 +308,10 @@
     document.getElementById("choose-cast-btn").hidden = !hasPywebview;
     document.getElementById("audio-path-row").hidden = hasPywebview;
     document.getElementById("cast-path-row").hidden = hasPywebview;
+    document.getElementById("lesson-choose-script-btn").hidden = !hasPywebview;
+    document.getElementById("lesson-choose-cast-btn").hidden = !hasPywebview;
+    document.getElementById("lesson-choose-quiz-btn").hidden = !hasPywebview;
+    document.getElementById("lesson-choose-coffee-btn").hidden = !hasPywebview;
   });
 
   apiFetch("/api/health").then(function (response) {
@@ -770,6 +779,21 @@
 
   populateModelSelect(lessonChatModelSelect);
 
+  function wireLessonFilePicker(buttonId, inputEl, pickFn) {
+    document.getElementById(buttonId).addEventListener("click", function () {
+      withPywebviewApi(function () {
+        window.pywebview.api[pickFn]().then(function (path) {
+          if (!path) return;
+          inputEl.value = path;
+        });
+      });
+    });
+  }
+  wireLessonFilePicker("lesson-choose-script-btn", lessonScriptInput, "pick_script_file");
+  wireLessonFilePicker("lesson-choose-cast-btn", lessonCastInput, "pick_cast_file");
+  wireLessonFilePicker("lesson-choose-quiz-btn", lessonQuizInput, "pick_quiz_file");
+  wireLessonFilePicker("lesson-choose-coffee-btn", lessonCoffeeInput, "pick_coffee_file");
+
   lessonModeSelect.addEventListener("change", function () {
     lessonImprovTurnsRow.hidden = lessonModeSelect.value !== "cyoa";
   });
@@ -777,19 +801,19 @@
   startLessonBtn.addEventListener("click", function () {
     const scriptPath = lessonScriptInput.value.trim();
     const castPath = lessonCastInput.value.trim();
-    if (!scriptPath || !castPath) {
-      lessonStatusEl.textContent = "Script and cast paths are both required.";
+    if (!scriptPath) {
+      lessonStatusEl.textContent = "Script path is required.";
       return;
     }
     startLessonBtn.disabled = true;
-    lessonStatusEl.textContent = "Starting lesson…";
+    lessonStatusEl.textContent = castPath ? "Starting lesson…" : "Starting lesson (building cast from script)…";
 
     const mode = lessonModeSelect.value;
     apiFetch("/api/session/start_live", {
       method: "POST",
       body: JSON.stringify({
         book: scriptPath,
-        cast: castPath,
+        cast: castPath || null,
         mode: mode,
         chat_model: lessonChatModelSelect.value || null,
         max_improv_exchanges: mode === "cyoa" ? (parseInt(lessonImprovTurnsInput.value, 10) || null) : null,

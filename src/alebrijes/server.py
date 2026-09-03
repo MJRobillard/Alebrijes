@@ -48,6 +48,7 @@ from alebrijes.cast import CastEntry, CastFile, load as load_cast, save as save_
 from alebrijes.cast.build import LOW_CONFIDENCE_THRESHOLD, build_cast_file
 from alebrijes.config import BUILTIN_VOICES, Config
 from alebrijes.ingest import Book
+from alebrijes.llm.scripter import MODEL_NAME as SCRIPTER_MODEL_NAME
 from alebrijes.preview import synthesize_preview as default_synthesize_preview
 from alebrijes.render import NARRATOR, render_book as default_render_book
 from alebrijes.session import DEFAULT_MAX_IMPROV_EXCHANGES, InteractiveSession, SessionMode
@@ -193,6 +194,16 @@ class _RenderJob:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
+@dataclass
+class _ChapterRenderError:
+    """Sentinel pushed onto a live session's chapter_queue when a chapter
+    fails to render, so `_drain_chapters` can tell that apart from a
+    successful `ChapterAudio` or the "no more chapters" `None` sentinel."""
+
+    chapter_index: int
+    exc: Exception
+
+
 class RagBuildRequest(BaseModel):
     transcript: str
     out_prefix: Optional[str] = None
@@ -255,7 +266,7 @@ class SessionScoreResponse(BaseModel):
 
 class SessionStartLiveRequest(BaseModel):
     book: str
-    cast: str
+    cast: Optional[str] = None  # omit to build the cast from `book` on the fly
     mode: str = "qa"
     checkpoints: list[str] = []
     lookahead_chapters: int = 2
@@ -286,9 +297,20 @@ def _default_build_render_pipeline(cast_file: CastFile) -> tuple:
 def _pin_chat_model(chat_stream_fn: "ChatStreamFn", model: Optional[str]) -> "ChatStreamFn":
     """Wraps `chat_stream_fn` to always use `model`, if given -- lets one
     session request a different Ollama chat model than the server's
-    default without every other session being affected."""
+    default without every other session being affected.
+
+    `model == scripter.MODEL_NAME` ("local") is not an Ollama model at all --
+    it routes to a locally running scripter chat server instead (see
+    alebrijes.llm.scripter), ignoring `chat_stream_fn` entirely. A fresh
+    `ScripterClient` per call keeps that server's own per-session history
+    from bleeding between unrelated Alebrijes sessions.
+    """
     if not model:
         return chat_stream_fn
+    if model == SCRIPTER_MODEL_NAME:
+        from alebrijes.llm.scripter import ScripterClient
+
+        return ScripterClient().chat_stream
     return lambda messages: chat_stream_fn(messages, model=model)
 
 
@@ -396,7 +418,7 @@ def create_app(
             names = list_models_fn()
         except OllamaUnavailable as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return {"models": names, "default": DEFAULT_CHAT_MODEL}
+        return {"models": [SCRIPTER_MODEL_NAME, *names], "default": DEFAULT_CHAT_MODEL}
 
     @app.get("/api/voices", response_model=VoicesResponse, dependencies=[Depends(_verify_request)])
     def voices() -> VoicesResponse:
@@ -745,10 +767,17 @@ def create_app(
         if not book.chapters:
             raise HTTPException(status_code=400, detail="Book has no chapters to render.")
 
-        try:
-            cast_file = load_cast(Path(payload.cast))
-        except (FileNotFoundError, KeyError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if payload.cast:
+            try:
+                cast_file = load_cast(Path(payload.cast))
+            except (FileNotFoundError, KeyError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        else:
+            # No cast given -- build one from the book itself rather than
+            # requiring a separate `alebrijes cast` step (and the staleness
+            # that comes with it, e.g. a re-edited script picking up a new
+            # character the last saved cast.yaml never saw).
+            cast_file = build_cast_file(book).cast_file
 
         try:
             mode = SessionMode(payload.mode)
@@ -815,6 +844,14 @@ def create_app(
             if chapter_audio.chapter_index == total_chapters - 1:
                 chapter_queue.put(None)  # sentinel: no more chapters coming
 
+        def on_render_error(chapter_index: int, exc: Exception) -> None:
+            # Without this, a chapter that fails to render (e.g. every span
+            # in it synthesizing to zero-length audio) leaves the background
+            # renderer thread dead and chapter_queue.get() blocking forever
+            # -- the client just sits at 0:00 with no explanation. Push a
+            # marker so _drain_chapters can turn it into a real error frame.
+            chapter_queue.put(_ChapterRenderError(chapter_index, exc))
+
         renderer = LookaheadRenderer(
             book,
             cast_file,
@@ -822,6 +859,7 @@ def create_app(
             agent,
             lookahead_chapters=payload.lookahead_chapters,
             on_chapter_ready=on_chapter_ready,
+            on_error=on_render_error,
         )
         renderer.start()
 
@@ -932,6 +970,14 @@ def create_app(
             while True:
                 chapter_audio = await run_in_threadpool(chapter_queue.get)
                 if chapter_audio is None:
+                    return
+                if isinstance(chapter_audio, _ChapterRenderError):
+                    await _send(
+                        {
+                            "type": "error",
+                            "detail": f"Chapter {chapter_audio.chapter_index + 1} failed to render: {chapter_audio.exc}",
+                        }
+                    )
                     return
                 interactive_session.extend_transcript(chapter_audio.timings)
                 wav_bytes = _audio_to_wav_bytes(chapter_audio.sample_rate, chapter_audio.audio)

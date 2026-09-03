@@ -49,6 +49,7 @@ class LookaheadRenderer:
         lookahead_chapters: int = DEFAULT_LOOKAHEAD_CHAPTERS,
         pause_ms: int = 250,
         on_chapter_ready: Optional[Callable[[ChapterAudio], None]] = None,
+        on_error: Optional[Callable[[int, Exception], None]] = None,
         resolve_chapter_spans_fn: Callable = resolve_chapter_spans,
         synthesize_chapter_fn: Callable = synthesize_chapter,
     ) -> None:
@@ -59,6 +60,7 @@ class LookaheadRenderer:
         self._lookahead_chapters = lookahead_chapters
         self._pause_ms = pause_ms
         self._on_chapter_ready = on_chapter_ready
+        self._on_error = on_error
         self._resolve_chapter_spans = resolve_chapter_spans_fn
         self._synthesize_chapter = synthesize_chapter_fn
 
@@ -118,6 +120,8 @@ class LookaheadRenderer:
             except Exception as exc:  # noqa: BLE001 - surfaced via .error, not crashing the thread
                 with self._cond:
                     self._error = exc
+                if self._on_error is not None:
+                    self._on_error(chapter.index, exc)
                 return
 
             chapter_audio = ChapterAudio(

@@ -72,7 +72,11 @@ def build_cast_file(
 
         for attribution in chapter_attributions:
             all_attributions.append(attribution)
-            if attribution.character != UNKNOWN and attribution.character not in characters:
+            # NARRATOR always gets its own hardcoded first entry below --
+            # an explicit "NARRATOR:" line in a script (attribute_script_chapter
+            # labels it Attribution(character="Narrator", ...)) shouldn't add
+            # a second one here.
+            if attribution.character not in (UNKNOWN, NARRATOR) and attribution.character not in characters:
                 characters.append(attribution.character)
 
     entries = [CastEntry(character=NARRATOR, voice_state_path=_voice_for(NARRATOR))]
