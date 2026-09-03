@@ -94,6 +94,7 @@
   .chat-turn { padding: 0.5rem 0.7rem; border-radius: 6px; margin-bottom: 0.5rem; font-size: 0.92rem; white-space: pre-wrap; }
   .chat-turn.user { background: var(--highlight-bg); }
   .chat-turn.narrator { background: var(--bg); border: 1px solid var(--line); }
+  .chat-turn.live { padding: 0.15rem 0.7rem; margin-bottom: 0.15rem; font-size: 0.82rem; font-style: italic; color: var(--ink-soft); }
   .chat-turn .role { display: block; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-soft); margin-bottom: 0.15rem; }
   #transcript {
     margin-top: 1rem;
@@ -172,6 +173,53 @@
     <h2 id="book-title">Now Playing</h2>
     <audio id="player" controls preload="auto"></audio>
     <div id="transcript"></div>
+  </section>
+
+  <section id="lesson-section">
+    <h2>Start a Lesson (live)</h2>
+    <p class="hint">
+      Point at a script (.script) and, optionally, a quiz file (.quiz.yaml) and a
+      coffee/mystery premise (.coffee.md). No pre-rendering needed — audio is
+      synthesized as the lesson plays.
+    </p>
+    <div class="row">
+      <input type="text" id="lesson-script-input" placeholder="/path/to/script.script" style="flex: 1;">
+    </div>
+    <div class="row" style="margin-top: 0.4rem;">
+      <input type="text" id="lesson-cast-input" placeholder="/path/to/book.cast.yaml" style="flex: 1;">
+    </div>
+    <div class="row" style="margin-top: 0.4rem;">
+      <input type="text" id="lesson-quiz-input" placeholder="/path/to/book.quiz.yaml (optional)" style="flex: 1;">
+    </div>
+    <div class="row" style="margin-top: 0.4rem;">
+      <input type="text" id="lesson-coffee-input" placeholder="/path/to/book.coffee.md (optional)" style="flex: 1;">
+    </div>
+    <div class="row" style="margin-top: 0.6rem;">
+      <select id="lesson-mode-select">
+        <option value="learning">Learning (lesson + interrogation)</option>
+        <option value="cyoa">Coffee (side-quest break)</option>
+        <option value="qa">Ask questions</option>
+        <option value="checkpoint">Checkpoints</option>
+      </select>
+      <select id="lesson-chat-model-select" title="Ollama chat model"></select>
+      <span id="lesson-improv-turns-row" hidden>
+        <label for="lesson-improv-turns-input" style="font-size: 0.85rem; color: var(--ink-soft);">Improv turns before steering back:</label>
+        <input type="number" id="lesson-improv-turns-input" min="1" max="20" value="3" style="width: 3.5rem;">
+      </span>
+      <button id="start-lesson-btn">Start Lesson</button>
+      <span id="lesson-status" class="status"></span>
+    </div>
+    <div id="lesson-score" class="status" hidden style="margin-top: 0.5rem; font-weight: 600;"></div>
+    <div id="lesson-book-title" style="font-weight: 600; margin-top: 0.75rem;"></div>
+    <audio id="lesson-player" controls hidden style="margin-top: 0.5rem;"></audio>
+    <div id="lesson-transcript"></div>
+    <div id="lesson-chat-log" style="margin-top: 0.75rem; max-height: 30vh; overflow-y: auto;" hidden></div>
+    <div class="row" id="lesson-choices-row" hidden style="margin-top: 0.5rem;"></div>
+    <div class="row" id="lesson-chat-row" hidden style="margin-top: 0.75rem;">
+      <input type="text" id="lesson-chat-input" placeholder="Type your answer or question…" style="flex: 1;">
+      <button id="lesson-chat-send-btn">Send</button>
+    </div>
+    <audio id="lesson-response-player" hidden></audio>
   </section>
 
   <section id="session-section" disabled>
@@ -371,22 +419,25 @@
     improvTurnsRow.hidden = modeSelect.value !== "cyoa";
   });
 
-  apiFetch("/api/llm/models").then(function (r) { return r.json(); }).then(function (result) {
-    chatModelSelect.innerHTML = "";
-    const defaultOpt = document.createElement("option");
-    defaultOpt.value = "";
-    defaultOpt.textContent = "Default (" + result.default + ")";
-    chatModelSelect.appendChild(defaultOpt);
-    (result.models || []).forEach(function (name) {
-      if (name === result.default) return; // already covered by the default option
-      const opt = document.createElement("option");
-      opt.value = name;
-      opt.textContent = name;
-      chatModelSelect.appendChild(opt);
+  function populateModelSelect(selectEl) {
+    apiFetch("/api/llm/models").then(function (r) { return r.json(); }).then(function (result) {
+      selectEl.innerHTML = "";
+      const defaultOpt = document.createElement("option");
+      defaultOpt.value = "";
+      defaultOpt.textContent = "Default (" + result.default + ")";
+      selectEl.appendChild(defaultOpt);
+      (result.models || []).forEach(function (name) {
+        if (name === result.default) return; // already covered by the default option
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        selectEl.appendChild(opt);
+      });
+    }).catch(function () {
+      selectEl.innerHTML = '<option value="">Default</option>';
     });
-  }).catch(function () {
-    chatModelSelect.innerHTML = '<option value="">Default</option>';
-  });
+  }
+  populateModelSelect(chatModelSelect);
   const sessionStatusEl = document.getElementById("session-status");
   const chatLogEl = document.getElementById("chat-log");
   const chatRow = document.getElementById("chat-row");
@@ -464,16 +515,50 @@
     return checkpoints;
   }
 
-  function appendChatTurn(role, text) {
+  function appendChatTurnTo(logEl, role, text) {
     const div = document.createElement("div");
-    div.className = "chat-turn " + (role === "user" ? "user" : "narrator");
-    const roleEl = document.createElement("span");
-    roleEl.className = "role";
-    roleEl.textContent = role === "user" ? "You" : "Narrator";
-    div.appendChild(roleEl);
+    div.className = "chat-turn " + role;
+    if (role !== "live") {
+      const roleEl = document.createElement("span");
+      roleEl.className = "role";
+      roleEl.textContent = role === "user" ? "You" : "Narrator";
+      div.appendChild(roleEl);
+    }
     div.appendChild(document.createTextNode(text));
-    chatLogEl.appendChild(div);
-    chatLogEl.scrollTop = chatLogEl.scrollHeight;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function appendChatTurn(role, text) {
+    appendChatTurnTo(chatLogEl, role, text);
+  }
+
+  // A small sequential-playback queue factory -- used for both the
+  // existing session's response audio and (separately) the live lesson
+  // flow's interrupt-response audio, each against its own <audio> element.
+  function makeAudioQueuePlayer(playerEl) {
+    const queue = [];
+    let playing = false;
+
+    function playNext() {
+      const next = queue.shift();
+      if (next === undefined) {
+        playing = false;
+        return;
+      }
+      playing = true;
+      playerEl.src = "data:audio/wav;base64," + next;
+      playerEl.play();
+    }
+
+    playerEl.addEventListener("ended", playNext);
+
+    return {
+      push: function (base64Wav) {
+        queue.push(base64Wav);
+        if (!playing) playNext();
+      },
+    };
   }
 
   const audioQueue = [];
@@ -554,6 +639,7 @@
         chatSendBtn.disabled = false;
         chatInput.focus();
       } else if (message.type === "audio_chunk") {
+        if (message.text) appendChatTurn("live", message.character + ": " + message.text);
         queueResponseAudio(message.data);
       } else if (message.type === "error") {
         appendChatTurn("narrator", "Error: " + message.detail);
@@ -646,6 +732,245 @@
       state.session.ws.send(JSON.stringify({ type: "position", span_id: span.span_id }));
     }
   });
+
+  // --- Live lesson flow: script + quiz + coffee premise, no pre-rendered
+  // audio -- POST /api/session/start_live, chapters stream in over the
+  // WebSocket as chapter_ready messages and play sequentially. ---------------
+
+  const lessonScriptInput = document.getElementById("lesson-script-input");
+  const lessonCastInput = document.getElementById("lesson-cast-input");
+  const lessonQuizInput = document.getElementById("lesson-quiz-input");
+  const lessonCoffeeInput = document.getElementById("lesson-coffee-input");
+  const lessonModeSelect = document.getElementById("lesson-mode-select");
+  const lessonChatModelSelect = document.getElementById("lesson-chat-model-select");
+  const lessonImprovTurnsRow = document.getElementById("lesson-improv-turns-row");
+  const lessonImprovTurnsInput = document.getElementById("lesson-improv-turns-input");
+  const startLessonBtn = document.getElementById("start-lesson-btn");
+  const lessonStatusEl = document.getElementById("lesson-status");
+  const lessonScoreEl = document.getElementById("lesson-score");
+  const lessonBookTitleEl = document.getElementById("lesson-book-title");
+  const lessonPlayer = document.getElementById("lesson-player");
+  const lessonTranscriptEl = document.getElementById("lesson-transcript");
+  const lessonChatLog = document.getElementById("lesson-chat-log");
+  const lessonChoicesRow = document.getElementById("lesson-choices-row");
+  const lessonChatRow = document.getElementById("lesson-chat-row");
+  const lessonChatInput = document.getElementById("lesson-chat-input");
+  const lessonChatSendBtn = document.getElementById("lesson-chat-send-btn");
+  const lessonResponsePlayer = makeAudioQueuePlayer(document.getElementById("lesson-response-player"));
+
+  const lessonState = {
+    ws: null,
+    sessionId: null,
+    chapterQueue: [],
+    playingChapter: false,
+    currentChapterIndex: null,
+    currentChapterSpans: [],
+    currentSpanId: null,
+  };
+
+  populateModelSelect(lessonChatModelSelect);
+
+  lessonModeSelect.addEventListener("change", function () {
+    lessonImprovTurnsRow.hidden = lessonModeSelect.value !== "cyoa";
+  });
+
+  startLessonBtn.addEventListener("click", function () {
+    const scriptPath = lessonScriptInput.value.trim();
+    const castPath = lessonCastInput.value.trim();
+    if (!scriptPath || !castPath) {
+      lessonStatusEl.textContent = "Script and cast paths are both required.";
+      return;
+    }
+    startLessonBtn.disabled = true;
+    lessonStatusEl.textContent = "Starting lesson…";
+
+    const mode = lessonModeSelect.value;
+    apiFetch("/api/session/start_live", {
+      method: "POST",
+      body: JSON.stringify({
+        book: scriptPath,
+        cast: castPath,
+        mode: mode,
+        chat_model: lessonChatModelSelect.value || null,
+        max_improv_exchanges: mode === "cyoa" ? (parseInt(lessonImprovTurnsInput.value, 10) || null) : null,
+        quiz_path: lessonQuizInput.value.trim() || null,
+        coffee_path: lessonCoffeeInput.value.trim() || null,
+        lookahead_chapters: 3,
+      }),
+    }).then(function (r) { return r.json(); }).then(function (result) {
+      lessonState.sessionId = result.session_id;
+      lessonState.chapterQueue = [];
+      lessonState.playingChapter = false;
+      lessonState.currentChapterIndex = null;
+      lessonState.currentChapterSpans = [];
+      lessonState.currentSpanId = null;
+      lessonBookTitleEl.textContent = result.book_title || "";
+      lessonTranscriptEl.innerHTML = "";
+      lessonChatLog.innerHTML = "";
+      lessonChatLog.hidden = false;
+      lessonChatRow.hidden = false;
+      lessonPlayer.hidden = false;
+      lessonStatusEl.textContent = result.spoken ? "Lesson started (spoken)." : "Lesson started (text-only).";
+      openLessonSession(result.session_id);
+      startLessonBtn.disabled = false;
+    }).catch(function (err) {
+      lessonStatusEl.textContent = err.message || String(err);
+      startLessonBtn.disabled = false;
+    });
+  });
+
+  function openLessonSession(sessionId) {
+    if (lessonState.ws) {
+      try { lessonState.ws.close(); } catch (e) { /* already closed */ }
+    }
+    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(
+      wsProtocol + "//" + window.location.host + "/api/session/" + sessionId + "/ws?token=" + encodeURIComponent(token)
+    );
+    lessonState.ws = ws;
+
+    ws.addEventListener("message", function (evt) {
+      const message = JSON.parse(evt.data);
+      if (message.type === "chapter_ready") {
+        lessonState.chapterQueue.push(message);
+        renderLessonChapterSpans(message.spans);
+        if (!lessonState.playingChapter) playNextLessonChapter();
+      } else if (message.type === "awaiting_input") {
+        lessonPlayer.pause();
+        appendChatTurnTo(lessonChatLog, "narrator", message.text);
+        showLessonChoices(message.choices || null);
+        lessonChatInput.disabled = false;
+        lessonChatSendBtn.disabled = false;
+        lessonChatInput.focus();
+      } else if (message.type === "answer") {
+        appendChatTurnTo(lessonChatLog, "narrator", message.text);
+        showLessonChoices(null);
+        lessonChatInput.disabled = false;
+        lessonChatSendBtn.disabled = false;
+        refreshLessonScore();
+      } else if (message.type === "audio_chunk") {
+        if (message.text) appendChatTurnTo(lessonChatLog, "live", message.character + ": " + message.text);
+        lessonResponsePlayer.push(message.data);
+      } else if (message.type === "error") {
+        appendChatTurnTo(lessonChatLog, "narrator", "Error: " + message.detail);
+        lessonChatInput.disabled = false;
+        lessonChatSendBtn.disabled = false;
+      }
+    });
+  }
+
+  function playNextLessonChapter() {
+    const next = lessonState.chapterQueue.shift();
+    if (next === undefined) {
+      lessonState.playingChapter = false;
+      return;
+    }
+    lessonState.playingChapter = true;
+    lessonState.currentChapterIndex = next.chapter_index;
+    lessonState.currentChapterSpans = next.spans;
+    lessonState.currentSpanId = null;
+    lessonPlayer.src = "data:audio/wav;base64," + next.data;
+    lessonPlayer.play();
+  }
+
+  lessonPlayer.addEventListener("ended", function () {
+    if (lessonState.ws && lessonState.ws.readyState === WebSocket.OPEN && lessonState.currentChapterIndex !== null) {
+      lessonState.ws.send(JSON.stringify({ type: "chapter_consumed", chapter_index: lessonState.currentChapterIndex }));
+    }
+    playNextLessonChapter();
+  });
+
+  function lessonSpanAt(currentMs) {
+    const spans = lessonState.currentChapterSpans;
+    let lo = 0, hi = spans.length - 1, best = null;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (spans[mid].start_ms <= currentMs) {
+        best = spans[mid];
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return best;
+  }
+
+  lessonPlayer.addEventListener("timeupdate", function () {
+    const span = lessonSpanAt(lessonPlayer.currentTime * 1000);
+    if (!span || span.span_id === lessonState.currentSpanId) return;
+
+    if (lessonState.currentSpanId) {
+      const previous = document.getElementById("lesson-span-" + lessonState.currentSpanId);
+      if (previous) previous.classList.remove("current");
+    }
+    lessonState.currentSpanId = span.span_id;
+    const el = document.getElementById("lesson-span-" + span.span_id);
+    if (el) {
+      el.classList.add("current");
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+    if (lessonState.ws && lessonState.ws.readyState === WebSocket.OPEN) {
+      lessonState.ws.send(JSON.stringify({ type: "position", span_id: span.span_id }));
+    }
+  });
+
+  function renderLessonChapterSpans(spans) {
+    const frag = document.createDocumentFragment();
+    spans.forEach(function (span) {
+      const line = document.createElement("div");
+      line.className = "span-line";
+      line.id = "lesson-span-" + span.span_id;
+
+      const character = document.createElement("span");
+      character.className = "character";
+      character.textContent = span.character;
+      line.appendChild(character);
+
+      line.appendChild(document.createTextNode(span.text));
+      frag.appendChild(line);
+    });
+    lessonTranscriptEl.appendChild(frag);
+  }
+
+  function showLessonChoices(choices) {
+    lessonChoicesRow.innerHTML = "";
+    if (!choices) {
+      lessonChoicesRow.hidden = true;
+      return;
+    }
+    lessonChoicesRow.hidden = false;
+    Object.keys(choices).forEach(function (key) {
+      const btn = document.createElement("button");
+      btn.textContent = key + ") " + choices[key];
+      btn.addEventListener("click", function () {
+        sendLessonChatMessage(key);
+      });
+      lessonChoicesRow.appendChild(btn);
+    });
+  }
+
+  function refreshLessonScore() {
+    if (!lessonState.sessionId) return;
+    apiFetch("/api/session/" + lessonState.sessionId + "/score").then(function (r) { return r.json(); }).then(function (result) {
+      lessonScoreEl.hidden = false;
+      lessonScoreEl.textContent = "Score: " + result.correct + "/" + result.total;
+    }).catch(function () { /* score display is best-effort */ });
+  }
+
+  lessonChatSendBtn.addEventListener("click", function () { sendLessonChatMessage(lessonChatInput.value.trim()); });
+  lessonChatInput.addEventListener("keydown", function (evt) {
+    if (evt.key === "Enter") sendLessonChatMessage(lessonChatInput.value.trim());
+  });
+
+  function sendLessonChatMessage(text) {
+    if (!text || !lessonState.ws || lessonState.ws.readyState !== WebSocket.OPEN) return;
+    appendChatTurnTo(lessonChatLog, "user", text);
+    lessonChatInput.value = "";
+    lessonChatInput.disabled = true;
+    lessonChatSendBtn.disabled = true;
+    showLessonChoices(null);
+    lessonState.ws.send(JSON.stringify({ type: "chat", text: text }));
+  }
 })();
 </script>
 </body>

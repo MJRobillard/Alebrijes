@@ -886,9 +886,17 @@ def create_app(
             async with send_lock:
                 await websocket.send_json(payload)
 
-        async def _send_audio(audio: "np.ndarray") -> None:
+        async def _send_audio(audio: "np.ndarray", text: str = "", character: str = "") -> None:
             wav_bytes = _audio_to_wav_bytes(agent.sample_rate, audio)
-            await _send({"type": "audio_chunk", "sample_rate": agent.sample_rate, "data": base64.b64encode(wav_bytes).decode("ascii")})
+            await _send(
+                {
+                    "type": "audio_chunk",
+                    "sample_rate": agent.sample_rate,
+                    "data": base64.b64encode(wav_bytes).decode("ascii"),
+                    "text": text,
+                    "character": character,
+                }
+            )
 
         async def _speak_llm_call(call_with_on_delta):
             """Runs a blocking `InteractiveSession` call (`handle_user_message`
@@ -914,14 +922,16 @@ def create_app(
                     return
                 for sentence in chunker.feed(delta):
                     audio = agent.synthesize(sentence)
-                    asyncio.run_coroutine_threadsafe(_send_audio(audio), loop).result()
+                    asyncio.run_coroutine_threadsafe(
+                        _send_audio(audio, text=sentence, character=interactive_session.character_voice), loop
+                    ).result()
 
             event = await run_in_threadpool(call_with_on_delta, _on_delta if agent is not None else None)
 
             if agent is not None:
                 tail = chunker.flush()
                 if tail:
-                    await _send_audio(agent.synthesize(tail))
+                    await _send_audio(agent.synthesize(tail), text=tail, character=interactive_session.character_voice)
 
             return event
 
