@@ -739,8 +739,11 @@ def test_session_ask_endpoint_returns_grounded_answer(tmp_path: Path) -> None:
 class _FakeSynthAgent:
     sample_rate = 8000
 
+    def __init__(self):
+        self.voice_calls: list[tuple[str, object]] = []
+
     def use_voice_state(self, voice, state) -> None:
-        pass
+        self.voice_calls.append((voice, state))
 
     def synthesize(self, text: str):
         import numpy as np
@@ -817,6 +820,41 @@ def test_session_start_with_chat_model_pins_it_for_that_sessions_chat_calls(tmp_
         ws.receive_json()
 
     assert seen_models == ["deepseek-r1:1.5b"]
+
+
+def test_pick_voice_for_text_returns_earliest_named_character() -> None:
+    from alebrijes.server import _pick_voice_for_text
+
+    cast_file = CastFile(
+        book_title="Fixture",
+        entries=[
+            CastEntry(character="Narrator", voice_state_path="alba"),
+            CastEntry(character="Felicity", voice_state_path="fantine"),
+            CastEntry(character="Sara", voice_state_path="cosette"),
+        ],
+    )
+    voice_states = {"Narrator": ("alba", "n"), "Felicity": ("fantine", "f"), "Sara": ("cosette", "s")}
+
+    result = _pick_voice_for_text("Sara turns to Felicity and smiles.", cast_file, voice_states)
+
+    assert result == ("Sara", ("cosette", "s"))
+
+
+def test_pick_voice_for_text_returns_none_when_no_character_named() -> None:
+    from alebrijes.server import _pick_voice_for_text
+
+    cast_file = CastFile(book_title="Fixture", entries=[CastEntry(character="Felicity", voice_state_path="fantine")])
+    voice_states = {"Felicity": ("fantine", "f")}
+
+    assert _pick_voice_for_text("Nobody mentioned here.", cast_file, voice_states) is None
+
+
+def test_pick_voice_for_text_returns_none_without_cast_or_voice_states() -> None:
+    from alebrijes.server import _pick_voice_for_text
+
+    assert _pick_voice_for_text("Felicity says hi.", None, {"Felicity": ("fantine", "f")}) is None
+    cast_file = CastFile(book_title="Fixture", entries=[CastEntry(character="Felicity", voice_state_path="fantine")])
+    assert _pick_voice_for_text("Felicity says hi.", cast_file, None) is None
 
 
 def test_pin_chat_model_local_routes_to_scripter_client_ignoring_chat_stream_fn(monkeypatch) -> None:
@@ -1145,6 +1183,98 @@ def test_session_ws_live_sends_chapter_progress_while_rendering(tmp_path: Path) 
     assert progress["lines_done"] == 1
     assert progress["lines_total"] == 1
     assert progress["chapter_index"] in (0, 1)
+
+
+def test_session_ws_live_chat_response_uses_voice_of_named_character(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(
+        CastFile(
+            book_title="Fixture",
+            entries=[
+                CastEntry(character="Narrator", voice_state_path="alba"),
+                CastEntry(character="Felicity", voice_state_path="fantine"),
+                CastEntry(character="Sara", voice_state_path="cosette"),
+            ],
+        ),
+        cast_path,
+    )
+
+    fake_agent = _FakeSynthAgent()
+
+    def _build_render_pipeline(cast_file):
+        return fake_agent, {
+            "Narrator": ("alba", "narrator-state"),
+            "Felicity": ("fantine", "felicity-state"),
+            "Sara": ("cosette", "sara-state"),
+        }
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        yield "Felicity says hello."
+
+    client = _client(
+        ingest_book=lambda path: _fixture_book(),
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=chat_stream_fn,
+        build_render_pipeline_fn=_build_render_pipeline,
+    )
+    start = client.post(
+        "/api/session/start_live",
+        headers=_headers(),
+        json={"book": "unused.epub", "cast": str(cast_path), "lookahead_chapters": 5},
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.send_json({"type": "chat", "text": "who is felicity"})
+        audio_chunk = _receive_until(ws, "audio_chunk")
+
+    assert audio_chunk["character"] == "Felicity"
+    assert ("fantine", "felicity-state") in fake_agent.voice_calls
+
+
+def test_session_ws_live_chat_response_falls_back_to_narrator_voice_when_unnamed(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(
+        CastFile(
+            book_title="Fixture",
+            entries=[
+                CastEntry(character="Narrator", voice_state_path="alba"),
+                CastEntry(character="Felicity", voice_state_path="fantine"),
+            ],
+        ),
+        cast_path,
+    )
+
+    fake_agent = _FakeSynthAgent()
+
+    def _build_render_pipeline(cast_file):
+        return fake_agent, {
+            "Narrator": ("alba", "narrator-state"),
+            "Felicity": ("fantine", "felicity-state"),
+        }
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        yield "Nobody named here says hello."
+
+    client = _client(
+        ingest_book=lambda path: _fixture_book(),
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=chat_stream_fn,
+        build_render_pipeline_fn=_build_render_pipeline,
+    )
+    start = client.post(
+        "/api/session/start_live",
+        headers=_headers(),
+        json={"book": "unused.epub", "cast": str(cast_path), "lookahead_chapters": 5},
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.send_json({"type": "chat", "text": "hi"})
+        audio_chunk = _receive_until(ws, "audio_chunk")
+
+    assert audio_chunk["character"] == "Narrator"
+    assert ("alba", "narrator-state") in fake_agent.voice_calls
 
 
 def test_session_ws_live_chapter_consumed_advances_lookahead(tmp_path: Path) -> None:

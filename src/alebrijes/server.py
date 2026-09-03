@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import re
 import secrets
 import socket
 import threading
@@ -294,6 +295,37 @@ def _default_build_render_pipeline(cast_file: CastFile) -> tuple:
     from alebrijes.render import build_render_agent
 
     return build_render_agent(cast_file)
+
+
+def _pick_voice_for_text(
+    text: str, cast_file: Optional[CastFile], voice_states: Optional[dict]
+) -> Optional[tuple[str, tuple[str, object]]]:
+    """Simple regex: whichever non-Narrator cast character is named
+    earliest in `text` is who's speaking -- e.g. a live LLM response that
+    mentions "Felicity" before "Sara" switches the agent to Felicity's
+    voice for that sentence. Deliberately dumb (no NLP, just a name
+    lookup) since the LLM reply itself has no attributed speaker the way a
+    pre-scripted line does (attribute/script.py).
+
+    Returns `(character, (voice_prompt, state))` for the earliest match, or
+    None when nothing matches or `cast_file`/`voice_states` aren't
+    available (e.g. a plain /api/session/start session, which only loads
+    the Narrator's voice) -- callers keep whatever voice is already active.
+    """
+    if not cast_file or not voice_states:
+        return None
+    names = [e.character for e in cast_file.entries if e.character != NARRATOR and e.character in voice_states]
+    if not names:
+        return None
+    pattern = re.compile(r"\b(" + "|".join(re.escape(name) for name in names) + r")\b", re.IGNORECASE)
+    match = pattern.search(text)
+    if not match:
+        return None
+    matched_lower = match.group(1).lower()
+    for name in names:
+        if name.lower() == matched_lower:
+            return name, voice_states[name]
+    return None
 
 
 def _pin_chat_model(chat_stream_fn: "ChatStreamFn", model: Optional[str]) -> "ChatStreamFn":
@@ -903,6 +935,8 @@ def create_app(
             "renderer": renderer,
             "chapter_queue": chapter_queue,
             "progress_queue": progress_queue,
+            "cast_file": cast_file,
+            "voice_states": voice_states,
         }
 
         return SessionStartResponse(session_id=session_id, book_title=book.title, spoken=True)
@@ -937,6 +971,8 @@ def create_app(
         renderer = entry.get("renderer")
         chapter_queue = entry.get("chapter_queue")
         progress_queue = entry.get("progress_queue")
+        cast_file = entry.get("cast_file")
+        voice_states = entry.get("voice_states")
 
         # Two coroutines can both push frames on this socket -- the request/
         # response loop below, and (for a live session) the chapter-drain
@@ -978,13 +1014,30 @@ def create_app(
             loop = asyncio.get_running_loop()
             chunker = SentenceChunker()
 
+            def _synthesize(sentence: str) -> tuple["np.ndarray", str]:
+                # Regex-pick a cast voice from the sentence's own text (see
+                # _pick_voice_for_text) so a live LLM response speaks as
+                # whichever character it names, instead of always narrating
+                # in the fixed Narrator voice -- falls back to Narrator when
+                # nothing matches or the full cast's voice_states aren't
+                # available (e.g. a plain /api/session/start session).
+                picked = _pick_voice_for_text(sentence, cast_file, voice_states)
+                if picked is not None:
+                    character, (voice_prompt, state) = picked
+                    agent.use_voice_state(voice_prompt, state)
+                else:
+                    character = interactive_session.character_voice
+                    if voice_states and NARRATOR in voice_states:
+                        agent.use_voice_state(*voice_states[NARRATOR])
+                return agent.synthesize(sentence), character
+
             def _on_delta(delta: str) -> None:
                 if agent is None:
                     return
                 for sentence in chunker.feed(delta):
-                    audio = agent.synthesize(sentence)
+                    audio, character = _synthesize(sentence)
                     asyncio.run_coroutine_threadsafe(
-                        _send_audio(audio, text=sentence, character=interactive_session.character_voice), loop
+                        _send_audio(audio, text=sentence, character=character), loop
                     ).result()
 
             event = await run_in_threadpool(call_with_on_delta, _on_delta if agent is not None else None)
@@ -992,7 +1045,8 @@ def create_app(
             if agent is not None:
                 tail = chunker.flush()
                 if tail:
-                    await _send_audio(agent.synthesize(tail), text=tail, character=interactive_session.character_voice)
+                    audio, character = _synthesize(tail)
+                    await _send_audio(audio, text=tail, character=character)
 
             return event
 
