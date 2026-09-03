@@ -168,6 +168,8 @@ class RenderRequest(BaseModel):
     cast: str
     out: Optional[str] = None
     pause_ms: int = 250
+    chapter_start: Optional[int] = None  # 1-based, inclusive -- same range chosen for /api/cast
+    chapter_end: Optional[int] = None
 
 
 class RenderJobStatus(BaseModel):
@@ -534,7 +536,15 @@ def create_app(
             low_confidence_lines=[],
         )
 
-    def _run_render_job(job_id: str, book_path: Path, cast_file: CastFile, out_path: Path, pause_ms: int) -> None:
+    def _run_render_job(
+        job_id: str,
+        book_path: Path,
+        cast_file: CastFile,
+        out_path: Path,
+        pause_ms: int,
+        chapter_start: Optional[int] = None,
+        chapter_end: Optional[int] = None,
+    ) -> None:
         job = jobs[job_id]
 
         def _on_chapter_done(done: int, total: int) -> None:
@@ -544,6 +554,18 @@ def create_app(
 
         try:
             book = ingest_book(book_path)
+            if chapter_start is not None or chapter_end is not None:
+                # Same 1-based inclusive-range slicing as build_cast_file --
+                # an omnibus rendered from a range-limited cast shouldn't
+                # then render chapters that were never cast.
+                start = chapter_start if chapter_start is not None else 1
+                end = chapter_end if chapter_end is not None else len(book.chapters)
+                book = Book(
+                    title=book.title,
+                    chapters=[c for c in book.chapters if start <= c.index + 1 <= end],
+                    source_format=book.source_format,
+                    quiz_checkpoints=book.quiz_checkpoints,
+                )
             with job.lock:
                 job.chapters_total = len(book.chapters)
                 job.chapter_titles = [c.title or f"Chapter {c.index + 1}" for c in book.chapters]
@@ -574,7 +596,7 @@ def create_app(
 
         thread = threading.Thread(
             target=_run_render_job,
-            args=(job_id, book_path, cast_file, out_path, payload.pause_ms),
+            args=(job_id, book_path, cast_file, out_path, payload.pause_ms, payload.chapter_start, payload.chapter_end),
             daemon=True,
         )
         thread.start()

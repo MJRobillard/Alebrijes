@@ -640,7 +640,15 @@
     chapterListEl.innerHTML = "";
     renderStatusEl.className = "status";
     renderStatusEl.textContent = "Starting render…";
-    apiFetch("/api/render", { method: "POST", body: JSON.stringify({ book: state.bookPath, cast: state.castPath }) })
+    const renderPayload = { book: state.bookPath, cast: state.castPath };
+    if (state.chapters.length && !chapterRangeRow.hidden) {
+      // Same chapter range chosen for casting -- an omnibus render that
+      // only cast (say) book two of three shouldn't then render the whole
+      // file end to end.
+      renderPayload.chapter_start = parseInt(chapterStartRange.value, 10);
+      renderPayload.chapter_end = parseInt(chapterEndRange.value, 10);
+    }
+    apiFetch("/api/render", { method: "POST", body: JSON.stringify(renderPayload) })
       .then(function (result) {
         pollRenderJob(result.job_id);
       })

@@ -458,6 +458,44 @@ def test_render_endpoint_starts_job_and_reports_progress_to_completion(tmp_path:
     assert out_path.read_bytes() == b"fake-m4b"
 
 
+def test_render_endpoint_chapter_range_only_renders_selected_chapters(tmp_path: Path) -> None:
+    cast_file = CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")])
+    cast_path = tmp_path / "cast.yaml"
+    save_cast(cast_file, cast_path)
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"unused, ingest_book is overridden")
+    out_path = tmp_path / "book.m4b"
+
+    seen_books: list[Book] = []
+
+    def _recording_render(book, cast_file, output_path, *, pause_ms, on_chapter_done=None, model=None):
+        seen_books.append(book)
+        output_path.write_bytes(b"fake-m4b")
+        return output_path
+
+    client = _client(ingest_book=lambda path: _fixture_book(), render_fn=_recording_render)
+
+    start = client.post(
+        "/api/render",
+        headers=_headers(),
+        json={"book": str(book_path), "cast": str(cast_path), "out": str(out_path), "chapter_start": 2, "chapter_end": 2},
+    )
+    assert start.status_code == 200
+    job_id = start.json()["job_id"]
+
+    deadline = time.time() + 5
+    status = None
+    while time.time() < deadline:
+        status = client.get(f"/api/render/{job_id}", headers=_headers()).json()
+        if status["status"] != "running":
+            break
+        time.sleep(0.02)
+
+    assert status["status"] == "done"
+    assert len(seen_books) == 1
+    assert [c.title for c in seen_books[0].chapters] == ["Two"]
+
+
 def test_render_endpoint_elapsed_time_freezes_after_completion(tmp_path: Path) -> None:
     cast_file = CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")])
     cast_path = tmp_path / "cast.yaml"
