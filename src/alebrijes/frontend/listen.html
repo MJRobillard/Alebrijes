@@ -192,6 +192,7 @@
         <option value="checkpoint">Checkpoints (pause for my reaction)</option>
         <option value="learning">Learning (comprehension questions)</option>
       </select>
+      <select id="chat-model-select" title="Ollama chat model"></select>
       <button id="start-session-btn">Start Session</button>
       <span id="session-status" class="status"></span>
     </div>
@@ -357,7 +358,25 @@
   const buildRagBtn = document.getElementById("build-rag-btn");
   const sessionStartRow = document.getElementById("session-start-row");
   const modeSelect = document.getElementById("mode-select");
+  const chatModelSelect = document.getElementById("chat-model-select");
   const startSessionBtn = document.getElementById("start-session-btn");
+
+  apiFetch("/api/llm/models").then(function (r) { return r.json(); }).then(function (result) {
+    chatModelSelect.innerHTML = "";
+    const defaultOpt = document.createElement("option");
+    defaultOpt.value = "";
+    defaultOpt.textContent = "Default (" + result.default + ")";
+    chatModelSelect.appendChild(defaultOpt);
+    (result.models || []).forEach(function (name) {
+      if (name === result.default) return; // already covered by the default option
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      chatModelSelect.appendChild(opt);
+    });
+  }).catch(function () {
+    chatModelSelect.innerHTML = '<option value="">Default</option>';
+  });
   const sessionStatusEl = document.getElementById("session-status");
   const chatLogEl = document.getElementById("chat-log");
   const chatRow = document.getElementById("chat-row");
@@ -478,10 +497,17 @@
 
     const mode = modeSelect.value;
     const checkpoints = (mode === "checkpoint" || mode === "learning") ? chapterBoundaryCheckpoints() : [];
+    const chatModel = chatModelSelect.value || null;
 
     apiFetch("/api/session/start", {
       method: "POST",
-      body: JSON.stringify({ m4b: state.audioPath, cast: state.castPath, mode: mode, checkpoints: checkpoints }),
+      body: JSON.stringify({
+        m4b: state.audioPath,
+        cast: state.castPath,
+        mode: mode,
+        checkpoints: checkpoints,
+        chat_model: chatModel,
+      }),
     }).then(function (r) { return r.json(); }).then(function (result) {
       openSession(result.session_id, result.spoken);
       sessionStatusEl.textContent = result.spoken ? "Session started (spoken responses)." : "Session started (text-only responses).";
@@ -519,6 +545,8 @@
         queueResponseAudio(message.data);
       } else if (message.type === "error") {
         appendChatTurn("narrator", "Error: " + message.detail);
+        chatInput.disabled = false;
+        chatSendBtn.disabled = false;
       }
     });
   }

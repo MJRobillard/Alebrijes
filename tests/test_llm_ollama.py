@@ -75,6 +75,30 @@ def test_embed_returns_float32_array() -> None:
     assert vector.tolist() == pytest.approx([0.1, 0.2, 0.3])
 
 
+def test_list_models_returns_model_names() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/tags"
+        return httpx.Response(
+            200,
+            json={"models": [{"name": "hermes3:8b"}, {"name": "nomic-embed-text:latest"}]},
+        )
+
+    client = _client_with_transport(handler)
+    names = client.list_models()
+
+    assert names == ["hermes3:8b", "nomic-embed-text:latest"]
+
+
+def test_list_models_raises_ollama_unavailable_on_connection_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    client = _client_with_transport(handler)
+
+    with pytest.raises(OllamaUnavailable):
+        client.list_models()
+
+
 def test_embed_raises_ollama_unavailable_on_http_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"error": "model not found"})

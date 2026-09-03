@@ -238,6 +238,7 @@ class SessionStartRequest(BaseModel):
     cast: str
     mode: str = "qa"
     checkpoints: list[str] = []
+    chat_model: Optional[str] = None  # overrides the server's default Ollama chat model for this session only
 
 
 class SessionStartResponse(BaseModel):
@@ -252,6 +253,7 @@ class SessionStartLiveRequest(BaseModel):
     mode: str = "qa"
     checkpoints: list[str] = []
     lookahead_chapters: int = 2
+    chat_model: Optional[str] = None
     rag_npz: Optional[str] = None
     rag_json: Optional[str] = None
 
@@ -270,6 +272,15 @@ def _default_build_render_pipeline(cast_file: CastFile) -> tuple:
     from alebrijes.render import build_render_agent
 
     return build_render_agent(cast_file)
+
+
+def _pin_chat_model(chat_stream_fn: "ChatStreamFn", model: Optional[str]) -> "ChatStreamFn":
+    """Wraps `chat_stream_fn` to always use `model`, if given -- lets one
+    session request a different Ollama chat model than the server's
+    default without every other session being affected."""
+    if not model:
+        return chat_stream_fn
+    return lambda messages: chat_stream_fn(messages, model=model)
 
 
 def _load_voice_state_dict(source_path: Path) -> dict:
@@ -340,6 +351,7 @@ def create_app(
     voices_dir: Optional[Path] = None,
     embed_fn: Optional[EmbedFn] = None,
     chat_stream_fn: Optional[ChatStreamFn] = None,
+    list_models_fn: Optional[Callable[[], list[str]]] = None,
     build_narrator_agent_fn: BuildNarratorAgentFn = _default_build_narrator_agent,
     build_render_pipeline_fn: BuildRenderPipelineFn = _default_build_render_pipeline,
 ) -> FastAPI:
@@ -353,6 +365,10 @@ def create_app(
         from alebrijes.llm.ollama import OllamaClient
 
         chat_stream_fn = OllamaClient().chat_stream
+    if list_models_fn is None:
+        from alebrijes.llm.ollama import OllamaClient
+
+        list_models_fn = OllamaClient().list_models
     app = FastAPI(title="alebrijes")
     jobs: dict[str, _RenderJob] = {}
     rag_jobs: dict[str, _RagBuildJob] = {}
@@ -372,6 +388,16 @@ def create_app(
 
         warning = torch_build_warning()
         return {"status": "ok", "warnings": [warning] if warning else []}
+
+    @app.get("/api/llm/models", dependencies=[Depends(_verify_request)])
+    def llm_models() -> dict:
+        from alebrijes.llm.ollama import DEFAULT_CHAT_MODEL, OllamaUnavailable
+
+        try:
+            names = list_models_fn()
+        except OllamaUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"models": names, "default": DEFAULT_CHAT_MODEL}
 
     @app.get("/api/voices", response_model=VoicesResponse, dependencies=[Depends(_verify_request)])
     def voices() -> VoicesResponse:
@@ -680,7 +706,7 @@ def create_app(
             transcript=transcript,
             rag_index=rag_index,
             embed_fn=embed_fn,
-            chat_stream_fn=chat_stream_fn,
+            chat_stream_fn=_pin_chat_model(chat_stream_fn, payload.chat_model),
             mode=mode,
             checkpoints=payload.checkpoints,
         )
@@ -742,7 +768,7 @@ def create_app(
             transcript=transcript,
             rag_index=rag_index,
             embed_fn=embed_fn,
-            chat_stream_fn=chat_stream_fn,
+            chat_stream_fn=_pin_chat_model(chat_stream_fn, payload.chat_model),
             mode=mode,
             checkpoints=payload.checkpoints,
         )
@@ -852,41 +878,44 @@ def create_app(
                 message = await websocket.receive_json()
                 msg_type = message.get("type")
 
-                if msg_type == "position":
-                    event = interactive_session.advance_position(message["span_id"])
-                    if event is not None:
-                        await _send({"type": event.kind, "text": event.text, "sources": event.sources})
+                try:
+                    if msg_type == "position":
+                        event = interactive_session.advance_position(message["span_id"])
+                        if event is not None:
+                            await _send({"type": event.kind, "text": event.text, "sources": event.sources})
 
-                elif msg_type == "chapter_consumed":
-                    if renderer is not None:
-                        renderer.mark_consumed(int(message["chapter_index"]))
+                    elif msg_type == "chapter_consumed":
+                        if renderer is not None:
+                            renderer.mark_consumed(int(message["chapter_index"]))
 
-                elif msg_type in ("chat", "choice"):
-                    text = message.get("text", "")
-                    chunker = SentenceChunker()
-                    pending_audio: list["np.ndarray"] = []
+                    elif msg_type in ("chat", "choice"):
+                        text = message.get("text", "")
+                        chunker = SentenceChunker()
+                        pending_audio: list["np.ndarray"] = []
 
-                    def _on_delta(delta: str) -> None:
-                        if agent is None:
-                            return
-                        for sentence in chunker.feed(delta):
-                            pending_audio.append(agent.synthesize(sentence))
+                        def _on_delta(delta: str) -> None:
+                            if agent is None:
+                                return
+                            for sentence in chunker.feed(delta):
+                                pending_audio.append(agent.synthesize(sentence))
 
-                    event = interactive_session.handle_user_message(
-                        text, on_delta=_on_delta if agent is not None else None
-                    )
+                        event = interactive_session.handle_user_message(
+                            text, on_delta=_on_delta if agent is not None else None
+                        )
 
-                    if agent is not None:
-                        tail = chunker.flush()
-                        if tail:
-                            pending_audio.append(agent.synthesize(tail))
-                        for audio in pending_audio:
-                            await _send_audio(audio)
+                        if agent is not None:
+                            tail = chunker.flush()
+                            if tail:
+                                pending_audio.append(agent.synthesize(tail))
+                            for audio in pending_audio:
+                                await _send_audio(audio)
 
-                    await _send({"type": "answer", "text": event.text, "sources": event.sources})
+                        await _send({"type": "answer", "text": event.text, "sources": event.sources})
 
-                else:
-                    await _send({"type": "error", "detail": f"Unknown message type: {msg_type!r}"})
+                    else:
+                        await _send({"type": "error", "detail": f"Unknown message type: {msg_type!r}"})
+                except Exception as exc:  # noqa: BLE001 - reported to the client, connection stays open
+                    await _send({"type": "error", "detail": str(exc)})
         except WebSocketDisconnect:
             pass
         finally:

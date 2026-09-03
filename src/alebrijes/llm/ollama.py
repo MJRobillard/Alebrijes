@@ -12,14 +12,27 @@ session layer, the server) can catch one clear error type and tell the user
 from __future__ import annotations
 
 import json
+import os
 from typing import Iterator, Optional
 
 import httpx
 import numpy as np
 
 DEFAULT_BASE_URL = "http://localhost:11434"
-DEFAULT_CHAT_MODEL = "hermes3:8b"
-DEFAULT_EMBED_MODEL = "nomic-embed-text"
+# Env-var overridable, not hardcoded-only -- so switching to a faster/slower
+# local model (e.g. a small model for a CPU-only machine) doesn't need a
+# source edit: `set ALEBRIJES_CHAT_MODEL=deepseek-r1:1.5b` (Windows) or
+# `export ALEBRIJES_CHAT_MODEL=deepseek-r1:1.5b` (macOS/Linux) before
+# launching the app.
+DEFAULT_CHAT_MODEL = os.environ.get("ALEBRIJES_CHAT_MODEL", "hermes3:8b")
+DEFAULT_EMBED_MODEL = os.environ.get("ALEBRIJES_EMBED_MODEL", "nomic-embed-text")
+
+# Connect fast-fails (Ollama not running should surface as a clear error in
+# a few seconds, not hang); reads get up to 60s per chunk -- generous enough
+# for CPU-only local inference without leaving a hung request unbounded.
+# A timeout here is now caught and surfaced as a clear WebSocket error
+# message (server.py's session_ws) rather than crashing the connection.
+_DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
 
 
 class OllamaUnavailable(Exception):
@@ -29,7 +42,7 @@ class OllamaUnavailable(Exception):
 class OllamaClient:
     def __init__(self, base_url: str = DEFAULT_BASE_URL, client: Optional[httpx.Client] = None) -> None:
         self._base_url = base_url.rstrip("/")
-        self._client = client or httpx.Client(timeout=60.0)
+        self._client = client or httpx.Client(timeout=_DEFAULT_TIMEOUT)
 
     def chat_stream(self, messages: list[dict], *, model: str = DEFAULT_CHAT_MODEL) -> Iterator[str]:
         """Yields content deltas as Ollama streams a chat response.
@@ -69,3 +82,16 @@ class OllamaClient:
 
         data = response.json()
         return np.asarray(data["embedding"], dtype=np.float32)
+
+    def list_models(self) -> list[str]:
+        """Names of models already pulled locally (`ollama list`'s data),
+        for populating a model picker -- not every name is a chat model
+        (embedding models show up too), so callers filter as needed."""
+        try:
+            response = self._client.get(f"{self._base_url}/api/tags")
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise OllamaUnavailable(f"Could not reach Ollama at {self._base_url}: {exc}") from exc
+
+        data = response.json()
+        return [entry["name"] for entry in data.get("models", [])]

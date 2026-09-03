@@ -41,6 +41,31 @@ def test_missing_token_is_rejected() -> None:
     assert response.status_code == 403
 
 
+# --- /api/llm/models ---------------------------------------------------
+
+
+def test_llm_models_returns_names_and_default() -> None:
+    client = _client(list_models_fn=lambda: ["hermes3:8b", "deepseek-r1:1.5b"])
+    response = client.get("/api/llm/models", headers=_headers())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["models"] == ["hermes3:8b", "deepseek-r1:1.5b"]
+    assert body["default"]  # hermes3:8b unless ALEBRIJES_CHAT_MODEL is set
+
+
+def test_llm_models_surfaces_ollama_unavailable_as_502() -> None:
+    from alebrijes.llm.ollama import OllamaUnavailable
+
+    def _raise():
+        raise OllamaUnavailable("no connection")
+
+    client = _client(list_models_fn=_raise)
+    response = client.get("/api/llm/models", headers=_headers())
+
+    assert response.status_code == 502
+
+
 def test_wrong_token_is_rejected() -> None:
     client = _client()
     response = client.get("/api/health", headers=_headers(token="wrong"))
@@ -732,6 +757,29 @@ def test_session_start_reports_spoken_true_when_narrator_agent_builds(tmp_path: 
     assert body["session_id"]
 
 
+def test_session_start_with_chat_model_pins_it_for_that_sessions_chat_calls(tmp_path: Path) -> None:
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+    seen_models = []
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        seen_models.append(model)
+        yield "ok"
+
+    client = _client(embed_fn=_fake_embed_fn, chat_stream_fn=chat_stream_fn)
+    start = client.post(
+        "/api/session/start",
+        headers=_headers(),
+        json={"m4b": str(m4b_path), "cast": str(cast_path), "chat_model": "deepseek-r1:1.5b"},
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.send_json({"type": "chat", "text": "hi"})
+        ws.receive_json()
+
+    assert seen_models == ["deepseek-r1:1.5b"]
+
+
 def test_session_start_reports_spoken_false_when_agent_build_fails(tmp_path: Path) -> None:
     m4b_path, cast_path = _setup_session_fixture(tmp_path)
 
@@ -943,7 +991,7 @@ def test_session_ws_live_chapter_consumed_advances_lookahead(tmp_path: Path) -> 
     start = client.post(
         "/api/session/start_live",
         headers=_headers(),
-        json={"book": "unused.epub", "cast": str(cast_path), "lookahead_chapters": 0},
+        json={"book": "unused.epub", "cast": str(cast_path), "lookahead_chapters": 1},
     )
     session_id = start.json()["session_id"]
 
