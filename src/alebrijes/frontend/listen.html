@@ -74,7 +74,7 @@
   .status { font-size: 0.88rem; color: var(--ink-soft); }
   .status.error { color: var(--danger); }
   .hint { font-size: 0.85rem; color: var(--ink-soft); margin: 0 0 0.9rem; line-height: 1.5; }
-  input[type=text] {
+  input[type=text], input[type=number] {
     font: inherit;
     padding: 0.3rem 0.5rem;
     border: 1px solid var(--line);
@@ -193,6 +193,10 @@
         <option value="learning">Learning (comprehension questions)</option>
       </select>
       <select id="chat-model-select" title="Ollama chat model"></select>
+      <span id="improv-turns-row" hidden>
+        <label for="improv-turns-input" style="font-size: 0.85rem; color: var(--ink-soft);">Improv turns before steering back:</label>
+        <input type="number" id="improv-turns-input" min="1" max="20" value="3" style="width: 3.5rem;">
+      </span>
       <button id="start-session-btn">Start Session</button>
       <span id="session-status" class="status"></span>
     </div>
@@ -359,7 +363,13 @@
   const sessionStartRow = document.getElementById("session-start-row");
   const modeSelect = document.getElementById("mode-select");
   const chatModelSelect = document.getElementById("chat-model-select");
+  const improvTurnsRow = document.getElementById("improv-turns-row");
+  const improvTurnsInput = document.getElementById("improv-turns-input");
   const startSessionBtn = document.getElementById("start-session-btn");
+
+  modeSelect.addEventListener("change", function () {
+    improvTurnsRow.hidden = modeSelect.value !== "cyoa";
+  });
 
   apiFetch("/api/llm/models").then(function (r) { return r.json(); }).then(function (result) {
     chatModelSelect.innerHTML = "";
@@ -498,6 +508,7 @@
     const mode = modeSelect.value;
     const checkpoints = (mode === "checkpoint" || mode === "learning") ? chapterBoundaryCheckpoints() : [];
     const chatModel = chatModelSelect.value || null;
+    const maxImprovExchanges = mode === "cyoa" ? parseInt(improvTurnsInput.value, 10) || null : null;
 
     apiFetch("/api/session/start", {
       method: "POST",
@@ -507,6 +518,7 @@
         mode: mode,
         checkpoints: checkpoints,
         chat_model: chatModel,
+        max_improv_exchanges: maxImprovExchanges,
       }),
     }).then(function (r) { return r.json(); }).then(function (result) {
       openSession(result.session_id, result.spoken);

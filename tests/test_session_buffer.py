@@ -22,7 +22,7 @@ class _FakeAgent:
     sample_rate = 1000
 
 
-def _fake_resolve(chapter, cast_file):
+def _fake_resolve(chapter, cast_file, *, script_format=False):
     return [f"span-for-{chapter.index}"]
 
 

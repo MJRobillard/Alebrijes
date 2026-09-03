@@ -21,7 +21,7 @@ from __future__ import annotations
 import threading
 from typing import Optional
 
-_BOOK_FILE_TYPES = ("Book files (*.epub;*.pdf;*.txt)", "All files (*.*)")
+_BOOK_FILE_TYPES = ("Book files (*.epub;*.pdf;*.txt;*.script)", "All files (*.*)")
 _VOICE_FILE_TYPES = ("Voice state files (*.pt;*.safetensors)", "All files (*.*)")
 _AUDIO_FILE_TYPES = ("Rendered audiobooks (*.m4b)", "All files (*.*)")
 _CAST_FILE_TYPES = ("Cast files (*.cast.yaml)", "All files (*.*)")

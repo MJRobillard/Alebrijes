@@ -31,9 +31,11 @@ def _ingest_book(book_path: Path):
         from alebrijes.ingest.pdf import parse
     elif suffix == ".txt":
         from alebrijes.ingest.txt import parse
+    elif suffix == ".script":
+        from alebrijes.ingest.script import parse
     else:
         raise NotImplementedError(
-            f"Ingest for '{suffix}' files is not supported. Supported formats: .epub, .pdf, .txt."
+            f"Ingest for '{suffix}' files is not supported. Supported formats: .epub, .pdf, .txt, .script."
         )
     return parse(book_path)
 

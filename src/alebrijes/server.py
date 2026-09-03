@@ -50,7 +50,7 @@ from alebrijes.config import BUILTIN_VOICES, Config
 from alebrijes.ingest import Book
 from alebrijes.preview import synthesize_preview as default_synthesize_preview
 from alebrijes.render import NARRATOR, render_book as default_render_book
-from alebrijes.session import InteractiveSession, SessionMode
+from alebrijes.session import DEFAULT_MAX_IMPROV_EXCHANGES, InteractiveSession, SessionMode
 from alebrijes.synth.streaming import SentenceChunker
 from alebrijes.transcript import Transcript, load as load_transcript
 
@@ -239,6 +239,7 @@ class SessionStartRequest(BaseModel):
     mode: str = "qa"
     checkpoints: list[str] = []
     chat_model: Optional[str] = None  # overrides the server's default Ollama chat model for this session only
+    max_improv_exchanges: Optional[int] = None  # CYOA: turns of free improv before steering back to plot
 
 
 class SessionStartResponse(BaseModel):
@@ -254,6 +255,7 @@ class SessionStartLiveRequest(BaseModel):
     checkpoints: list[str] = []
     lookahead_chapters: int = 2
     chat_model: Optional[str] = None
+    max_improv_exchanges: Optional[int] = None
     rag_npz: Optional[str] = None
     rag_json: Optional[str] = None
 
@@ -335,6 +337,8 @@ def _default_ingest_book(book_path: Path) -> Book:
         from alebrijes.ingest.pdf import parse
     elif suffix == ".txt":
         from alebrijes.ingest.txt import parse
+    elif suffix == ".script":
+        from alebrijes.ingest.script import parse
     else:
         raise NotImplementedError(f"Ingest for '{suffix}' files is not supported.")
     return parse(book_path)
@@ -709,6 +713,11 @@ def create_app(
             chat_stream_fn=_pin_chat_model(chat_stream_fn, payload.chat_model),
             mode=mode,
             checkpoints=payload.checkpoints,
+            max_improv_exchanges=(
+                payload.max_improv_exchanges
+                if payload.max_improv_exchanges is not None
+                else DEFAULT_MAX_IMPROV_EXCHANGES
+            ),
         )
 
         try:
@@ -771,6 +780,11 @@ def create_app(
             chat_stream_fn=_pin_chat_model(chat_stream_fn, payload.chat_model),
             mode=mode,
             checkpoints=payload.checkpoints,
+            max_improv_exchanges=(
+                payload.max_improv_exchanges
+                if payload.max_improv_exchanges is not None
+                else DEFAULT_MAX_IMPROV_EXCHANGES
+            ),
         )
 
         chapter_queue: "queue_module.Queue" = queue_module.Queue()

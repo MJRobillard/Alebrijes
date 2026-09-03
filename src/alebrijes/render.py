@@ -49,7 +49,7 @@ class VoicedSpan:
     voice_prompt: str
 
 
-def resolve_chapter_spans(chapter: Chapter, cast_file: CastFile) -> list[VoicedSpan]:
+def resolve_chapter_spans(chapter: Chapter, cast_file: CastFile, *, script_format: bool = False) -> list[VoicedSpan]:
     """Segments and attributes one chapter, then resolves each span to a voice.
 
     Narration always speaks in the Narrator's voice. Dialogue speaks in its
@@ -57,9 +57,19 @@ def resolve_chapter_spans(chapter: Chapter, cast_file: CastFile) -> list[VoicedS
     attribution is Unknown, or when it names a character the cast file
     doesn't have an entry for (attribution can find names the cast-review
     step hasn't seen/assigned yet).
+
+    `script_format=True` (set by callers from `book.source_format ==
+    "script"`) skips the prose segment/attribute guess entirely in favor of
+    the exact, deterministic parse in `attribute/script.py`.
     """
-    spans = [span for paragraph in chapter.paragraphs for span in segment_paragraph(paragraph, chapter.index)]
-    attributions_by_span = {a.span.span_id: a for a in RuleBasedAttributor().attribute(spans)}
+    if script_format:
+        from alebrijes.attribute.script import attribute_script_chapter
+
+        spans, attributions = attribute_script_chapter(chapter)
+    else:
+        spans = [span for paragraph in chapter.paragraphs for span in segment_paragraph(paragraph, chapter.index)]
+        attributions = RuleBasedAttributor().attribute(spans)
+    attributions_by_span = {a.span.span_id: a for a in attributions}
     narrator_voice = cast_file.voice_for(NARRATOR)
 
     voiced: list[VoicedSpan] = []
@@ -225,7 +235,7 @@ def render_book(
         total_chapters = len(book.chapters)
         book_cursor_ms = 0
         for chapter in book.chapters:
-            voiced_spans = resolve_chapter_spans(chapter, cast_file)
+            voiced_spans = resolve_chapter_spans(chapter, cast_file, script_format=book.source_format == "script")
             audio, chapter_timings = synthesize_chapter(voiced_spans, voice_states, agent, pause_ms=pause_ms)
 
             part_path = staging_dir / f"chapter_{chapter.index:04d}.wav"

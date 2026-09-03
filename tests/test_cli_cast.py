@@ -54,3 +54,19 @@ def test_cast_command_supports_txt_books(tmp_path: Path) -> None:
     assert exit_code == 0
     cast_file = load(tmp_path / "book.cast.yaml")
     assert cast_file.voice_for("Colin")
+
+
+def test_cast_command_supports_script_books_with_exact_attribution(tmp_path: Path) -> None:
+    script_path = tmp_path / "book.script"
+    script_path.write_text(
+        "NARRATOR: The room was quiet.\nCOLIN: Let's take another path.\nSABLE: You shouldn't be here.\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(["cast", str(script_path)])
+
+    assert exit_code == 0
+    cast_file = load(tmp_path / "book.cast.yaml")
+    assert cast_file.voice_for("Narrator")
+    assert cast_file.voice_for("Colin")
+    assert cast_file.voice_for("Sable")

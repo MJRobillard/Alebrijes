@@ -98,6 +98,30 @@ Phase 4's packaged installer bundles the open model directly — it never
 touches the gate at all, so end users of the shipped app need no Hugging
 Face account under any circumstance (see `PHASES.md`).
 
+## Script-format books (`.script`)
+
+Alongside `.epub`/`.pdf`/`.txt` (attribution guessed by `segment`/`attribute`,
+with a confidence score and a manual review step), a `.script` file gives
+exact, deterministic attribution — useful when you already know who says
+what, or when the rule-based guesser gets a prose book wrong often enough to
+be worth converting. Every non-blank line is `NAME: text`, name in ALL CAPS
+(strict casing is what lets a colon inside dialogue text not be mistaken for
+a speaker prefix); a line starting with `# ` begins a new chapter. `NARRATOR`
+is a naming convention, not special syntax — it's just the name that becomes
+narration instead of dialogue:
+
+```
+# Chapter One
+NARRATOR: The room was quiet.
+COLIN: Let's take another path.
+SABLE: You shouldn't be here.
+```
+
+`alebrijes cast book.script` and `alebrijes render book.script --cast ...`
+work exactly like any other format — the cast file it produces has one
+entry per speaker name found, with 100% confidence (nothing shows up in the
+cast-review "needs review" list, since there's nothing to guess).
+
 ## Interactive narration (`/listen`)
 
 On top of the offline render pipeline, the desktop app's `/listen` page adds
@@ -165,6 +189,12 @@ regardless of which fragment above also applies:
 | **Improvised (choose-your-own-adventure) branches** | Tone consistency during improvisation, and how it steers back to canon | CYOA drifts off-tone, or the return-to-plot feels abrupt |
 | **Stay in voice** | Never breaking character as "an AI" | The narrator ever refers to itself as an assistant/model |
 | **Lead with a short sentence** | The first sentence being brief, so sentence-chunked audio (see below) starts playing almost immediately | Responses still open with a long sentence before saying anything |
+
+*How many turns* CYOA improvises before steering back to the book (not what
+it says while doing so, which is the frontmatter's `cyoa` fragment above) is
+set per-session, not in this file — an "Improv turns before steering back"
+field appears in `/listen`'s session panel when CYOA mode is selected
+(defaults to 3).
 
 Changes to this file take effect on the next session — no restart needed
 beyond starting a new session, since it's read fresh each time

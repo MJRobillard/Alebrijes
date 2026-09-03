@@ -62,6 +62,38 @@ def test_unresolvable_dialogue_falls_back_to_narrator_voice() -> None:
     assert dialogue[0].voice_prompt == "alba"
 
 
+def test_script_format_resolves_spans_via_exact_attribution_not_guessing() -> None:
+    chapter = Chapter(
+        title="Ch1",
+        index=0,
+        paragraphs=[
+            Paragraph(text="NARRATOR: The room was quiet.", index=0),
+            Paragraph(text="COLIN: Let's take another path.", index=1),
+        ],
+    )
+
+    voiced = resolve_chapter_spans(chapter, _cast_file(), script_format=True)
+
+    assert voiced[0].character == NARRATOR
+    assert voiced[0].span.text == "The room was quiet."
+    assert voiced[1].character == "Colin"
+    assert voiced[1].span.text == "Let's take another path."
+    assert voiced[1].voice_prompt == "javert"
+
+
+def test_script_format_falls_back_to_narrator_voice_for_uncast_character() -> None:
+    chapter = Chapter(
+        title="Ch1",
+        index=0,
+        paragraphs=[Paragraph(text="SABLE: You shouldn't be here.", index=0)],
+    )
+
+    voiced = resolve_chapter_spans(chapter, _cast_file(), script_format=True)
+
+    assert voiced[0].character == NARRATOR
+    assert voiced[0].voice_prompt == "alba"
+
+
 def test_character_missing_from_cast_falls_back_to_narrator_voice() -> None:
     cast_file = CastFile(book_title="Fixture Book", entries=[CastEntry(character=NARRATOR, voice_state_path="alba")])
     chapter = Chapter(

@@ -780,6 +780,32 @@ def test_session_start_with_chat_model_pins_it_for_that_sessions_chat_calls(tmp_
     assert seen_models == ["deepseek-r1:1.5b"]
 
 
+def test_session_start_with_max_improv_exchanges_pins_cyoa_steer_back_timing(tmp_path: Path) -> None:
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+    seen_prompts = []
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        seen_prompts.append(messages[0]["content"])
+        yield "ok"
+
+    client = _client(embed_fn=_fake_embed_fn, chat_stream_fn=chat_stream_fn)
+    start = client.post(
+        "/api/session/start",
+        headers=_headers(),
+        json={"m4b": str(m4b_path), "cast": str(cast_path), "mode": "cyoa", "max_improv_exchanges": 1},
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.send_json({"type": "chat", "text": "I open the door."})
+        ws.receive_json()
+
+    # max_improv_exchanges=1 means the very first exchange already hits the
+    # cap and should inject an upcoming (higher-seq) span as a steer-back
+    # beat -- with the default of 3 this wouldn't happen until turn three.
+    assert "Span number 1" in seen_prompts[0] or "Span number 2" in seen_prompts[0]
+
+
 def test_session_start_reports_spoken_false_when_agent_build_fails(tmp_path: Path) -> None:
     m4b_path, cast_path = _setup_session_fixture(tmp_path)
 

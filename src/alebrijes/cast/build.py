@@ -13,6 +13,7 @@ from typing import Optional
 
 from alebrijes.attribute import Attribution
 from alebrijes.attribute.rules import UNKNOWN, RuleBasedAttributor
+from alebrijes.attribute.script import attribute_script_chapter
 from alebrijes.cast import CastEntry, CastFile
 from alebrijes.config import BUILTIN_VOICES
 from alebrijes.ingest import Book
@@ -61,8 +62,15 @@ def build_cast_file(
         chapters = [c for c in chapters if start <= c.index + 1 <= end]
 
     for chapter in chapters:
-        spans = [span for paragraph in chapter.paragraphs for span in segment_paragraph(paragraph, chapter.index)]
-        for attribution in attributor.attribute(spans):
+        if book.source_format == "script":
+            # Already-explicit speakers (ingest/script.py) -- nothing to
+            # guess, so skip segment/attribute's NLP heuristics entirely.
+            _, chapter_attributions = attribute_script_chapter(chapter)
+        else:
+            spans = [span for paragraph in chapter.paragraphs for span in segment_paragraph(paragraph, chapter.index)]
+            chapter_attributions = attributor.attribute(spans)
+
+        for attribution in chapter_attributions:
             all_attributions.append(attribution)
             if attribution.character != UNKNOWN and attribution.character not in characters:
                 characters.append(attribution.character)

@@ -109,7 +109,9 @@ class LookaheadRenderer:
                 return
 
             try:
-                voiced_spans = self._resolve_chapter_spans(chapter, self._cast_file)
+                voiced_spans = self._resolve_chapter_spans(
+                    chapter, self._cast_file, script_format=self._book.source_format == "script"
+                )
                 audio, timings = self._synthesize_chapter(
                     voiced_spans, self._voice_states, self._agent, pause_ms=self._pause_ms
                 )

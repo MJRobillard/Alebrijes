@@ -27,3 +27,8 @@ class Chapter:
 class Book:
     title: str
     chapters: list[Chapter] = field(default_factory=list)
+    # "prose" (default, epub/pdf/txt): attribution is guessed by segment +
+    # attribute. "script" (ingest/script.py's NAME: text format): attribution
+    # is already explicit in the source, so cast/build.py and render.py skip
+    # the guessing entirely -- see attribute/script.py.
+    source_format: str = "prose"
