@@ -981,7 +981,24 @@ def create_app(
 
         async def _send(payload: dict) -> None:
             async with send_lock:
-                await websocket.send_json(payload)
+                try:
+                    await websocket.send_json(payload)
+                except RuntimeError as exc:
+                    # Starlette raises a plain RuntimeError (not
+                    # WebSocketDisconnect) when send() is called after a
+                    # close frame already went out -- e.g. the client
+                    # disconnected while a checkpoint/quiz response was
+                    # still synthesizing in a background thread, which can
+                    # easily outlive a connection that's already gone.
+                    # Normalize it to WebSocketDisconnect so every caller
+                    # already handling that (the receive loop below, and
+                    # its own except-and-report-error block) doesn't need
+                    # a second code path -- without this, that block's own
+                    # `await _send(...)` attempt to report the error hit
+                    # the same dead socket and raised again, uncaught.
+                    if "close message" in str(exc):
+                        raise WebSocketDisconnect() from exc
+                    raise
 
         async def _send_audio(audio: "np.ndarray", text: str = "", character: str = "") -> None:
             wav_bytes = _audio_to_wav_bytes(agent.sample_rate, audio)
@@ -1056,57 +1073,68 @@ def create_app(
             # LookaheadRenderer finishes it (see session/buffer.py) -- a
             # thread -> queue.Queue -> run_in_threadpool bridge, since the
             # renderer produces chapters on its own background thread.
-            while True:
-                chapter_audio = await run_in_threadpool(chapter_queue.get)
-                if chapter_audio is None:
-                    return
-                if isinstance(chapter_audio, _ChapterRenderError):
+            #
+            # This is a separate asyncio Task from the receive loop below,
+            # so a disconnect mid-_send here isn't caught by that loop's
+            # own try/except WebSocketDisconnect -- an uncaught
+            # WebSocketDisconnect from _send would just be logged as a
+            # never-retrieved task exception instead of ending quietly.
+            try:
+                while True:
+                    chapter_audio = await run_in_threadpool(chapter_queue.get)
+                    if chapter_audio is None:
+                        return
+                    if isinstance(chapter_audio, _ChapterRenderError):
+                        await _send(
+                            {
+                                "type": "error",
+                                "detail": f"Chapter {chapter_audio.chapter_index + 1} failed to render: {chapter_audio.exc}",
+                            }
+                        )
+                        return
+                    interactive_session.extend_transcript(chapter_audio.timings)
+                    wav_bytes = _audio_to_wav_bytes(chapter_audio.sample_rate, chapter_audio.audio)
                     await _send(
                         {
-                            "type": "error",
-                            "detail": f"Chapter {chapter_audio.chapter_index + 1} failed to render: {chapter_audio.exc}",
+                            "type": "chapter_ready",
+                            "chapter_index": chapter_audio.chapter_index,
+                            "title": chapter_audio.title,
+                            "sample_rate": chapter_audio.sample_rate,
+                            "data": base64.b64encode(wav_bytes).decode("ascii"),
+                            "spans": [
+                                {
+                                    "span_id": t.span_id,
+                                    "chapter_index": t.chapter_index,
+                                    "paragraph_index": t.paragraph_index,
+                                    "character": t.character,
+                                    "kind": t.kind.name,
+                                    "text": t.text,
+                                    "start_ms": t.start_ms,
+                                    "end_ms": t.end_ms,
+                                }
+                                for t in chapter_audio.timings
+                            ],
                         }
                     )
-                    return
-                interactive_session.extend_transcript(chapter_audio.timings)
-                wav_bytes = _audio_to_wav_bytes(chapter_audio.sample_rate, chapter_audio.audio)
-                await _send(
-                    {
-                        "type": "chapter_ready",
-                        "chapter_index": chapter_audio.chapter_index,
-                        "title": chapter_audio.title,
-                        "sample_rate": chapter_audio.sample_rate,
-                        "data": base64.b64encode(wav_bytes).decode("ascii"),
-                        "spans": [
-                            {
-                                "span_id": t.span_id,
-                                "chapter_index": t.chapter_index,
-                                "paragraph_index": t.paragraph_index,
-                                "character": t.character,
-                                "kind": t.kind.name,
-                                "text": t.text,
-                                "start_ms": t.start_ms,
-                                "end_ms": t.end_ms,
-                            }
-                            for t in chapter_audio.timings
-                        ],
-                    }
-                )
+            except WebSocketDisconnect:
+                return
 
         async def _drain_progress() -> None:
-            # Same thread -> queue.Queue -> run_in_threadpool bridge as
-            # _drain_chapters, for the per-line progress LookaheadRenderer
-            # reports while still inside one (possibly long) chapter.
-            while True:
-                chapter_index, lines_done, lines_total = await run_in_threadpool(progress_queue.get)
-                await _send(
-                    {
-                        "type": "chapter_progress",
-                        "chapter_index": chapter_index,
-                        "lines_done": lines_done,
-                        "lines_total": lines_total,
-                    }
-                )
+            # Same thread -> queue.Queue -> run_in_threadpool bridge (and
+            # the same separate-Task disconnect handling) as _drain_chapters.
+            try:
+                while True:
+                    chapter_index, lines_done, lines_total = await run_in_threadpool(progress_queue.get)
+                    await _send(
+                        {
+                            "type": "chapter_progress",
+                            "chapter_index": chapter_index,
+                            "lines_done": lines_done,
+                            "lines_total": lines_total,
+                        }
+                    )
+            except WebSocketDisconnect:
+                return
 
         drain_task = asyncio.create_task(_drain_chapters()) if chapter_queue is not None else None
         progress_drain_task = asyncio.create_task(_drain_progress()) if progress_queue is not None else None
@@ -1146,6 +1174,11 @@ def create_app(
 
                     else:
                         await _send({"type": "error", "detail": f"Unknown message type: {msg_type!r}"})
+                except WebSocketDisconnect:
+                    # Let the outer try/except below handle it -- reporting
+                    # it as an "error" message would just hit the same dead
+                    # socket _send already normalized this from.
+                    raise
                 except Exception as exc:  # noqa: BLE001 - reported to the client, connection stays open
                     await _send({"type": "error", "detail": str(exc)})
         except WebSocketDisconnect:
