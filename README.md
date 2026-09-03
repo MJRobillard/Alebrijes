@@ -98,6 +98,58 @@ Phase 4's packaged installer bundles the open model directly — it never
 touches the gate at all, so end users of the shipped app need no Hugging
 Face account under any circumstance (see `PHASES.md`).
 
+## Interactive narration (`/listen`)
+
+On top of the offline render pipeline, the desktop app's `/listen` page adds
+a live listening mode: the current line is shown as it plays, you can
+interrupt with a chat question, branch into an improvised choose-your-own-
+adventure, or have the narrator pause at checkpoints for your reaction or a
+comprehension question. This talks to a **local Ollama server** — nothing
+leaves the machine.
+
+**Setup**: install [Ollama](https://ollama.com), then pull the two models
+this uses:
+```bash
+ollama pull hermes3:8b          # chat/narration
+ollama pull nomic-embed-text    # embeddings for spoiler-safe retrieval
+```
+`ollama serve` needs to be running before you start a session. If you want
+different models (e.g. something smaller/faster on a CPU-only machine), set
+these environment variables before launching the app, or just pick a
+different pulled model from the dropdown in the session panel itself:
+```bash
+export ALEBRIJES_CHAT_MODEL=deepseek-r1:1.5b     # macOS/Linux
+export ALEBRIJES_EMBED_MODEL=nomic-embed-text
+# Windows (PowerShell): $env:ALEBRIJES_CHAT_MODEL = "deepseek-r1:1.5b"
+```
+
+**Prompting instructions live in `src/alebrijes/llm/narrator_guidelines.md`**
+— a plain Markdown file, not buried in Python, specifically so it can be
+read and edited without touching code. Every mode's system prompt includes
+it verbatim (see `llm/prompts.py`). It has six sections; what each one
+governs, and when to edit it:
+
+| Section | Governs | Edit it if... |
+|---|---|---|
+| **No spoilers** | Refusing to reveal/imply anything past the listener's current position | Answers still leak future plot, or over-refuse things that already happened |
+| **Ground answers in the retrieved excerpts** | Only using the RAG passages actually retrieved, not invented lore | The model is hallucinating details not in the book |
+| **Checkpoints and comprehension questions** | How pause-for-choice and quiz-style prompts are phrased, and how answers get reacted to | Checkpoint/Learning mode feels like a quiz show instead of an in-story beat |
+| **Improvised (CYOA) branches** | Tone consistency during improvisation, and how it steers back to canon | CYOA drifts off-tone, or the return-to-plot feels abrupt |
+| **Stay in voice** | Never breaking character as "an AI" | The narrator ever refers to itself as an assistant/model |
+| **Lead with a short sentence** | The first sentence being brief, so sentence-chunked audio (see below) starts playing almost immediately | Responses still open with a long sentence before saying anything |
+
+Changes to this file take effect on the next session — no restart needed
+beyond starting a new session, since it's read fresh each time
+`llm/prompts.py` builds a system prompt.
+
+**Spoken responses stream sentence-by-sentence**: as the model generates a
+reply, each completed sentence is synthesized (in the book's own cloned
+Narrator voice, via `synth/streaming.py`) and sent to the browser
+immediately — not after the whole response finishes — so playback starts
+as soon as the first sentence is ready. This is exactly why the "lead with
+a short sentence" guideline above matters: a short opener means less time
+sitting in silence before you hear anything.
+
 ## Testing
 
 ```bash

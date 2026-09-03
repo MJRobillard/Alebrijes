@@ -880,6 +880,44 @@ def test_session_ws_chat_returns_answer_and_streams_audio_when_spoken(tmp_path: 
             assert handle.getnframes() > 0
 
 
+def test_session_ws_chat_delivers_first_sentence_audio_before_generation_finishes(tmp_path: Path) -> None:
+    # Proves delivery is truly progressive, not just synthesis: the second
+    # sentence is deliberately slow to arrive from the LLM, so the first
+    # sentence's audio_chunk must reach the client well before that -- if
+    # the server were batching all audio until handle_user_message returns
+    # (the bug this replaced), the first message wouldn't show up until
+    # after the full ~0.5s generation, not within the tight window below.
+    import time
+
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        yield "First sentence. "
+        time.sleep(0.5)
+        yield "Second sentence."
+
+    client = _client(
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=chat_stream_fn,
+        build_narrator_agent_fn=lambda cast_file: _FakeSynthAgent(),
+    )
+    start = client.post(
+        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.send_json({"type": "chat", "text": "hello"})
+        started = time.time()
+        first = ws.receive_json()
+        first_elapsed = time.time() - started
+        ws.receive_json()  # second audio_chunk
+        ws.receive_json()  # answer
+
+    assert first["type"] == "audio_chunk"
+    assert first_elapsed < 0.4  # well before the 0.5s sleep before sentence two
+
+
 def test_session_ws_chat_sends_text_only_when_not_spoken(tmp_path: Path) -> None:
     m4b_path, cast_path = _setup_session_fixture(tmp_path)
 

@@ -836,6 +836,41 @@ def create_app(
             wav_bytes = _audio_to_wav_bytes(agent.sample_rate, audio)
             await _send({"type": "audio_chunk", "sample_rate": agent.sample_rate, "data": base64.b64encode(wav_bytes).decode("ascii")})
 
+        async def _speak_llm_call(call_with_on_delta):
+            """Runs a blocking `InteractiveSession` call (`handle_user_message`
+            or `advance_position`) in a worker thread, sending each sentence's
+            audio out over the socket the moment it's synthesized instead of
+            batching it all up until the whole LLM response is done -- that's
+            what actually makes the "lead with a short sentence" guideline
+            (narrator_guidelines.md) pay off as low time-to-first-audio,
+            rather than just spreading the same total wait out differently.
+
+            `call_with_on_delta` is `lambda on_delta: <the blocking call>(...,
+            on_delta=on_delta)`. `on_delta` runs on the worker thread, so it
+            hands each send to the event loop via `run_coroutine_threadsafe`
+            and blocks on the result -- keeps chunks in order and paced by
+            actual network delivery, not fired-and-forgotten from a thread
+            that's about to move on to the next sentence.
+            """
+            loop = asyncio.get_running_loop()
+            chunker = SentenceChunker()
+
+            def _on_delta(delta: str) -> None:
+                if agent is None:
+                    return
+                for sentence in chunker.feed(delta):
+                    audio = agent.synthesize(sentence)
+                    asyncio.run_coroutine_threadsafe(_send_audio(audio), loop).result()
+
+            event = await run_in_threadpool(call_with_on_delta, _on_delta if agent is not None else None)
+
+            if agent is not None:
+                tail = chunker.flush()
+                if tail:
+                    await _send_audio(agent.synthesize(tail))
+
+            return event
+
         async def _drain_chapters() -> None:
             # Runs alongside the receive loop for a live (still-rendering)
             # session, forwarding each chapter's audio + span timings as
@@ -880,7 +915,12 @@ def create_app(
 
                 try:
                     if msg_type == "position":
-                        event = interactive_session.advance_position(message["span_id"])
+                        span_id = message["span_id"]
+                        event = await _speak_llm_call(
+                            lambda on_delta, span_id=span_id: interactive_session.advance_position(
+                                span_id, on_delta=on_delta
+                            )
+                        )
                         if event is not None:
                             await _send({"type": event.kind, "text": event.text, "sources": event.sources})
 
@@ -890,26 +930,11 @@ def create_app(
 
                     elif msg_type in ("chat", "choice"):
                         text = message.get("text", "")
-                        chunker = SentenceChunker()
-                        pending_audio: list["np.ndarray"] = []
-
-                        def _on_delta(delta: str) -> None:
-                            if agent is None:
-                                return
-                            for sentence in chunker.feed(delta):
-                                pending_audio.append(agent.synthesize(sentence))
-
-                        event = interactive_session.handle_user_message(
-                            text, on_delta=_on_delta if agent is not None else None
+                        event = await _speak_llm_call(
+                            lambda on_delta, text=text: interactive_session.handle_user_message(
+                                text, on_delta=on_delta
+                            )
                         )
-
-                        if agent is not None:
-                            tail = chunker.flush()
-                            if tail:
-                                pending_audio.append(agent.synthesize(tail))
-                            for audio in pending_audio:
-                                await _send_audio(audio)
-
                         await _send({"type": "answer", "text": event.text, "sources": event.sources})
 
                     else:
