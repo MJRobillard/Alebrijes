@@ -106,6 +106,85 @@ def test_on_chapter_ready_receives_chapters_in_order() -> None:
         renderer.stop()
 
 
+def _fake_resolve_multi_span(num_spans_per_chapter: int):
+    def _resolve(chapter, cast_file, *, script_format=False):
+        return [f"span-{chapter.index}-{i}" for i in range(num_spans_per_chapter)]
+
+    return _resolve
+
+
+def test_first_chapter_with_many_spans_is_split_into_a_fast_start_head_and_tail() -> None:
+    from alebrijes.session.buffer import FAST_START_HEAD_SPANS
+
+    received: list[ChapterAudio] = []
+    renderer = LookaheadRenderer(
+        _book(2),
+        CastFile(book_title="Fixture"),
+        voice_states={},
+        agent=_FakeAgent(),
+        lookahead_chapters=5,
+        on_chapter_ready=received.append,
+        resolve_chapter_spans_fn=_fake_resolve_multi_span(FAST_START_HEAD_SPANS + 3),
+        synthesize_chapter_fn=_fake_synthesize,
+    )
+    try:
+        renderer.start()
+        assert _wait_until(lambda: len(received) >= 3)  # head + tail of ch0, then all of ch1
+        # Two on_chapter_ready calls for chapter 0 (head, then tail) before chapter 1's single call.
+        assert [c.chapter_index for c in received[:3]] == [0, 0, 1]
+        assert _wait_until(lambda: renderer.chapters_done == 2)  # still counted as 2 whole chapters
+    finally:
+        renderer.stop()
+
+
+def test_chapter_with_few_spans_is_not_split() -> None:
+    from alebrijes.session.buffer import FAST_START_HEAD_SPANS
+
+    received: list[ChapterAudio] = []
+    renderer = LookaheadRenderer(
+        _book(1),
+        CastFile(book_title="Fixture"),
+        voice_states={},
+        agent=_FakeAgent(),
+        lookahead_chapters=5,
+        on_chapter_ready=received.append,
+        resolve_chapter_spans_fn=_fake_resolve_multi_span(FAST_START_HEAD_SPANS),  # exactly the threshold, not over
+        synthesize_chapter_fn=_fake_synthesize,
+    )
+    try:
+        renderer.start()
+        assert _wait_until(lambda: renderer.chapters_done == 1)
+        time.sleep(0.2)
+        assert len(received) == 1
+    finally:
+        renderer.stop()
+
+
+def test_single_chapter_book_is_never_split_even_with_many_spans() -> None:
+    # Splitting a book's only (first-and-last) chapter would make
+    # server.py's "no more chapters" sentinel fire after just the head.
+    from alebrijes.session.buffer import FAST_START_HEAD_SPANS
+
+    received: list[ChapterAudio] = []
+    renderer = LookaheadRenderer(
+        _book(1),
+        CastFile(book_title="Fixture"),
+        voice_states={},
+        agent=_FakeAgent(),
+        lookahead_chapters=5,
+        on_chapter_ready=received.append,
+        resolve_chapter_spans_fn=_fake_resolve_multi_span(FAST_START_HEAD_SPANS + 3),
+        synthesize_chapter_fn=_fake_synthesize,
+    )
+    try:
+        renderer.start()
+        assert _wait_until(lambda: renderer.chapters_done == 1)
+        time.sleep(0.2)
+        assert len(received) == 1
+    finally:
+        renderer.stop()
+
+
 def test_on_line_progress_receives_per_line_updates_from_synthesize_chapter() -> None:
     def _synthesize_with_progress(voiced_spans, voice_states, agent, pause_ms=250, on_line_done=None):
         if on_line_done is not None:

@@ -28,6 +28,19 @@ from alebrijes.transcript import SpanTiming
 
 DEFAULT_LOOKAHEAD_CHAPTERS = 2
 
+# The very first chapter's audio otherwise has to fully finish -- every
+# line, synthesized sequentially -- before the listener hears anything at
+# all, which for a long chapter can be minutes of dead air. Splitting just
+# chapter 0 into a small "head" (synthesized and sent first) plus the rest
+# gets real audio playing almost immediately, at the cost of one extra
+# on_chapter_ready call for that one chapter. A whole-span count, not a
+# duration or sentence count: splitting *inside* a span would let its
+# SpanTiming straddle two separate audio blobs, which the transcript
+# highlighting (one span's timing is local to the one blob it's in) and
+# quiz-checkpoint triggering (keyed to a whole span_id) both assume never
+# happens.
+FAST_START_HEAD_SPANS = 2
+
 
 @dataclass
 class ChapterAudio:
@@ -105,6 +118,42 @@ class LookaheadRenderer:
                 self._consumed_chapter = chapter_index
                 self._cond.notify_all()
 
+    def _synthesize_and_emit(self, chapter, voiced_spans: list) -> bool:
+        """Synthesizes one piece of `chapter`'s spans and emits it via
+        on_chapter_ready. Returns False (after recording/reporting the
+        error) on failure, so the caller can stop -- same contract the old
+        single-call-per-chapter `_run` body had."""
+        try:
+
+            def _on_line_done(lines_done: int, lines_total: int) -> None:
+                if self._on_line_progress is not None:
+                    self._on_line_progress(chapter.index, lines_done, lines_total)
+
+            audio, timings = self._synthesize_chapter(
+                voiced_spans,
+                self._voice_states,
+                self._agent,
+                pause_ms=self._pause_ms,
+                on_line_done=_on_line_done,
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced via .error, not crashing the thread
+            with self._cond:
+                self._error = exc
+            if self._on_error is not None:
+                self._on_error(chapter.index, exc)
+            return False
+
+        chapter_audio = ChapterAudio(
+            chapter_index=chapter.index,
+            title=chapter.title or f"Chapter {chapter.index + 1}",
+            audio=audio,
+            sample_rate=self._agent.sample_rate,
+            timings=timings,
+        )
+        if self._on_chapter_ready is not None:
+            self._on_chapter_ready(chapter_audio)
+        return True
+
     def _run(self) -> None:
         for chapter in self._book.chapters:
             with self._cond:
@@ -120,18 +169,6 @@ class LookaheadRenderer:
                 voiced_spans = self._resolve_chapter_spans(
                     chapter, self._cast_file, script_format=self._book.source_format == "script"
                 )
-
-                def _on_line_done(lines_done: int, lines_total: int, chapter_index=chapter.index) -> None:
-                    if self._on_line_progress is not None:
-                        self._on_line_progress(chapter_index, lines_done, lines_total)
-
-                audio, timings = self._synthesize_chapter(
-                    voiced_spans,
-                    self._voice_states,
-                    self._agent,
-                    pause_ms=self._pause_ms,
-                    on_line_done=_on_line_done,
-                )
             except Exception as exc:  # noqa: BLE001 - surfaced via .error, not crashing the thread
                 with self._cond:
                     self._error = exc
@@ -139,14 +176,24 @@ class LookaheadRenderer:
                     self._on_error(chapter.index, exc)
                 return
 
-            chapter_audio = ChapterAudio(
-                chapter_index=chapter.index,
-                title=chapter.title or f"Chapter {chapter.index + 1}",
-                audio=audio,
-                sample_rate=self._agent.sample_rate,
-                timings=timings,
+            # Only the book's very first chapter gets the fast-start split
+            # (see FAST_START_HEAD_SPANS) -- and only when there's a later
+            # chapter to fall back on, since server.py's "no more chapters"
+            # sentinel fires off this chapter being the *last* one too; on
+            # a single-chapter book that would fire after just the head.
+            is_fast_start_chapter = (
+                chapter is self._book.chapters[0]
+                and len(self._book.chapters) > 1
+                and len(voiced_spans) > FAST_START_HEAD_SPANS
             )
+            if is_fast_start_chapter:
+                head, tail = voiced_spans[:FAST_START_HEAD_SPANS], voiced_spans[FAST_START_HEAD_SPANS:]
+                if not self._synthesize_and_emit(chapter, head):
+                    return
+                voiced_spans = tail
+
+            if not self._synthesize_and_emit(chapter, voiced_spans):
+                return
+
             with self._cond:
                 self._chapters_done += 1
-            if self._on_chapter_ready is not None:
-                self._on_chapter_ready(chapter_audio)
