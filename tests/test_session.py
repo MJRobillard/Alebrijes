@@ -241,6 +241,93 @@ def test_learning_checkpoint_with_attached_question_sets_awaiting_quiz_question(
     assert event.kind == "awaiting_input"
 
 
+def test_prefetch_checkpoint_caches_response_without_mutating_session_state() -> None:
+    calls = []
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+        chat_calls=calls,
+    )
+
+    session.prefetch_checkpoint("0.2.0")
+
+    assert len(calls) == 1  # the LLM call happened...
+    assert session.awaiting_quiz_question is None  # ...but nothing else changed yet
+    assert session.state == SessionState.PLAYING
+    assert session.current_span_id == "0.0.0"
+    assert session.history == []
+
+
+def test_advance_position_uses_prefetched_response_without_calling_the_llm_again() -> None:
+    calls = []
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+        chat_calls=calls,
+    )
+    session.prefetch_checkpoint("0.2.0")
+    assert len(calls) == 1
+
+    event = session.advance_position("0.2.0")
+
+    assert len(calls) == 1  # advance_position did not call the LLM again
+    assert event.kind == "awaiting_input"
+    assert event.text == "canned response"
+    assert session.awaiting_quiz_question is not None
+    assert session.awaiting_quiz_question.id == "q1"
+
+
+def test_advance_position_falls_back_to_a_live_call_when_not_prefetched() -> None:
+    calls = []
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+        chat_calls=calls,
+    )
+
+    event = session.advance_position("0.2.0")
+
+    assert len(calls) == 1
+    assert event.kind == "awaiting_input"
+
+
+def test_prefetch_checkpoint_is_a_noop_for_a_non_checkpoint_span() -> None:
+    calls = []
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+        chat_calls=calls,
+    )
+
+    session.prefetch_checkpoint("0.3.0")  # not in checkpoints
+
+    assert calls == []
+
+
+def test_prefetch_checkpoint_is_a_noop_when_already_cached() -> None:
+    calls = []
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+        chat_calls=calls,
+    )
+
+    session.prefetch_checkpoint("0.2.0")
+    session.prefetch_checkpoint("0.2.0")
+
+    assert len(calls) == 1
+
+
 def test_learning_checkpoint_prompt_includes_exact_question_and_options() -> None:
     calls = []
     session = _session(

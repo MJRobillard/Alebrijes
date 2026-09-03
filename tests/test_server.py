@@ -1399,6 +1399,53 @@ def test_session_start_live_with_quiz_path_merges_script_quiz_checkpoints(tmp_pa
     assert progress["answered"]["q1"]["correct"] is True
 
 
+def test_session_ws_live_prefetches_checkpoint_response_before_position_reaches_it(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture Lesson", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
+    quiz_path = _write_quiz_file(tmp_path)
+
+    calls = []
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        calls.append(messages)
+        yield "What is an IAM role? A) A user B) A delegated identity"
+
+    client = _client(
+        ingest_book=lambda path: _fixture_script_book_with_quiz(),
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=chat_stream_fn,
+        build_render_pipeline_fn=_fake_build_render_pipeline,
+    )
+    start = client.post(
+        "/api/session/start_live",
+        headers=_headers(),
+        json={
+            "book": "unused.script",
+            "cast": str(cast_path),
+            "mode": "learning",
+            "lookahead_chapters": 5,
+            "quiz_path": str(quiz_path),
+        },
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        _receive_skipping_progress(ws)  # chapter_ready -- kicks off the checkpoint prefetch
+
+        # The prefetch runs on a background thread; give it a moment to
+        # land before ever sending a "position" message.
+        deadline = time.time() + 2
+        while len(calls) < 1 and time.time() < deadline:
+            time.sleep(0.02)
+        assert len(calls) == 1  # prefetched already, with no position message sent yet
+
+        ws.send_json({"type": "position", "span_id": "0.0.0"})
+        awaiting = _receive_until(ws, "awaiting_input")
+
+    assert awaiting["choices"] == {"A": "A user", "B": "A delegated identity"}
+    assert len(calls) == 1  # advance_position reused the cached response, no second LLM call
+
+
 def test_session_start_live_without_quiz_path_has_no_choices_on_checkpoint(tmp_path: Path) -> None:
     cast_path = tmp_path / "book.cast.yaml"
     save_cast(CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)

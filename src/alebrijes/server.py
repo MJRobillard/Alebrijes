@@ -978,6 +978,10 @@ def create_app(
         # response loop below, and (for a live session) the chapter-drain
         # task. A lock keeps their sends from interleaving mid-frame.
         send_lock = asyncio.Lock()
+        # Per-checkpoint background prefetch tasks kicked off by
+        # _drain_chapters as each chapter becomes ready -- tracked so a
+        # disconnect (the finally block below) cancels any still running.
+        prefetch_tasks: list[asyncio.Task] = []
 
         async def _send(payload: dict) -> None:
             async with send_lock:
@@ -1093,6 +1097,21 @@ def create_app(
                         )
                         return
                     interactive_session.extend_transcript(chapter_audio.timings)
+
+                    # Fire all of this chapter's checkpoint responses off
+                    # concurrently (one thread each) the moment the chapter
+                    # is available -- by the time playback actually reaches
+                    # one, InteractiveSession.prefetch_checkpoint has
+                    # usually already cached its (LLM-latency-bound)
+                    # response, so advance_position doesn't have to wait on
+                    # it live. Tracked so a disconnect cancels any still
+                    # running rather than leaving them to finish unused.
+                    for t in chapter_audio.timings:
+                        if t.span_id in interactive_session.checkpoints:
+                            prefetch_tasks.append(
+                                asyncio.create_task(run_in_threadpool(interactive_session.prefetch_checkpoint, t.span_id))
+                            )
+
                     wav_bytes = _audio_to_wav_bytes(chapter_audio.sample_rate, chapter_audio.audio)
                     await _send(
                         {
@@ -1188,6 +1207,8 @@ def create_app(
                 drain_task.cancel()
             if progress_drain_task is not None:
                 progress_drain_task.cancel()
+            for task in prefetch_tasks:
+                task.cancel()
             if renderer is not None:
                 renderer.stop()
             sessions.pop(session_id, None)

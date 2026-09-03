@@ -112,6 +112,10 @@ class InteractiveSession:
         self.history: list[ChatTurn] = []
         self.improv_exchange_count = 0
         self._praise_rotation_index = 0
+        # span_id -> (prompt_text, QuizQuestion|None), populated by
+        # prefetch_checkpoint ahead of playback actually reaching a
+        # checkpoint, so advance_position can skip the LLM round-trip.
+        self._checkpoint_prompt_cache: dict[str, tuple[str, Optional[QuizQuestion]]] = {}
 
     @property
     def current_seq(self) -> int:
@@ -119,21 +123,27 @@ class InteractiveSession:
             return 0
         return self._seq_by_span_id.get(self.current_span_id, 0)
 
-    def _position_summary(self) -> str:
+    def _position_summary(self, seq: Optional[int] = None) -> str:
         if self.current_span_id is None or not self.transcript.spans:
             return "the start of the book"
-        span = self.transcript.spans[self.current_seq]
+        span = self.transcript.spans[self.current_seq if seq is None else seq]
         return f"chapter {span.chapter_index + 1}, near: “{span.text[:80]}”"
 
-    def _current_paragraph_text(self) -> str:
-        """Full (untruncated) text of the span at the listener's current
-        position -- unlike `_position_summary`'s 80-char pointer, this is
-        meant for a chat backend with its own RAG over the same book (e.g.
-        `llm.scripter.ScripterClient`) to ground retrieval/replies in
-        exactly where the listener is, not just the raw question."""
+    def _current_paragraph_text(self, seq: Optional[int] = None) -> str:
+        """Full (untruncated) text of the span at the given position (the
+        listener's current one by default) -- unlike `_position_summary`'s
+        80-char pointer, this is meant for a chat backend with its own RAG
+        over the same book (e.g. `llm.scripter.ScripterClient`) to ground
+        retrieval/replies in exactly where the listener is, not just the
+        raw question.
+
+        `seq` is overridden by `prefetch_checkpoint` to build a checkpoint's
+        prompt against *its own* position, since prefetching only makes
+        sense ahead of the listener actually reaching it -- current_seq
+        would be stale at that point."""
         if self.current_span_id is None or not self.transcript.spans:
             return ""
-        return self.transcript.spans[self.current_seq].text
+        return self.transcript.spans[self.current_seq if seq is None else seq].text
 
     def extend_transcript(self, new_spans: list) -> None:
         """Appends newly-available spans (e.g. a chapter a live
@@ -152,6 +162,62 @@ class InteractiveSession:
         bound = self.current_seq if max_seq is None else max_seq
         return search_rag(self.rag_index, query_vector, max_seq=bound, top_k=self.top_k)
 
+    def _checkpoint_prompt_messages(self, span_id: str) -> tuple[list[dict], Optional[QuizQuestion]]:
+        """Builds the "ask about this checkpoint in character" messages for
+        `span_id` -- shared by `advance_position` (live) and
+        `prefetch_checkpoint` (ahead of time). Grounded in `span_id`'s own
+        position (not necessarily `self.current_span_id`, which is stale
+        during a prefetch), so RAG retrieval and position context are
+        correct either way.
+
+        Returns the `QuizQuestion` too, if this checkpoint has one, so the
+        caller decides when to actually set `awaiting_quiz_question` --
+        never during a prefetch, only once the checkpoint is really
+        reached."""
+        seq = self._seq_by_span_id.get(span_id, self.current_seq)
+        question_id = self.quiz_checkpoints.get(span_id) if self.mode is SessionMode.LEARNING else None
+        question = self.quiz_questions.get(question_id) if question_id else None
+        pause_message = (
+            self._format_quiz_prompt(question) if question is not None else "(narration has reached a pause point)"
+        )
+
+        hits = self._retrieve("what has just happened in the story", max_seq=seq)
+        messages = build_messages(
+            mode=self.mode,
+            book_title=self.book_title,
+            character_voice=self.character_voice,
+            position_summary=self._position_summary(seq),
+            rag_excerpts=[hit.entry.text for hit in hits],
+            history=self.history[-self.history_limit :],
+            user_message=pause_message,
+            current_paragraph=self._current_paragraph_text(seq),
+        )
+        return messages, question
+
+    def prefetch_checkpoint(self, span_id: str) -> None:
+        """Precomputes and caches the checkpoint response for `span_id` --
+        the (sometimes multi-second) LLM round-trip that `advance_position`
+        would otherwise have to do right as playback reaches it. Meant to
+        be called well ahead of that, e.g. as soon as the chapter
+        containing this checkpoint is rendered (see server.py's
+        `_drain_chapters`), so by the time the listener actually gets
+        there the response is just sitting in the cache.
+
+        Safe to call any time before the checkpoint is reached, and safe
+        to call concurrently for several checkpoints at once (each writes
+        a distinct cache key) -- reads session state but mutates only the
+        cache, never `awaiting_quiz_question`/history/state, which must
+        only change once the checkpoint is actually reached. A no-op if
+        `span_id` isn't a checkpoint in the current mode, or is already
+        cached."""
+        if span_id in self._checkpoint_prompt_cache or span_id not in self.checkpoints:
+            return
+        if self.mode not in (SessionMode.CHECKPOINT, SessionMode.LEARNING):
+            return
+        messages, question = self._checkpoint_prompt_messages(span_id)
+        prompt_text = "".join(self._chat_stream_fn(messages))
+        self._checkpoint_prompt_cache[span_id] = (prompt_text, question)
+
     def advance_position(
         self, span_id: str, *, on_delta: Optional[Callable[[str], None]] = None
     ) -> Optional[SessionEvent]:
@@ -167,31 +233,28 @@ class InteractiveSession:
 
         self.state = SessionState.PAUSED_FOR_USER
 
-        question_id = self.quiz_checkpoints.get(span_id) if self.mode is SessionMode.LEARNING else None
-        question = self.quiz_questions.get(question_id) if question_id else None
-        if question is not None:
-            self.awaiting_quiz_question = question
-            pause_message = self._format_quiz_prompt(question)
-        else:
-            pause_message = "(narration has reached a pause point)"
-
-        hits = self._retrieve("what has just happened in the story")
-        messages = build_messages(
-            mode=self.mode,
-            book_title=self.book_title,
-            character_voice=self.character_voice,
-            position_summary=self._position_summary(),
-            rag_excerpts=[hit.entry.text for hit in hits],
-            history=self.history[-self.history_limit :],
-            user_message=pause_message,
-            current_paragraph=self._current_paragraph_text(),
-        )
-        chunks: list[str] = []
-        for delta in self._chat_stream_fn(messages):
+        cached = self._checkpoint_prompt_cache.pop(span_id, None)
+        if cached is not None:
+            prompt_text, question = cached
+            if question is not None:
+                self.awaiting_quiz_question = question
             if on_delta is not None:
-                on_delta(delta)
-            chunks.append(delta)
-        prompt_text = "".join(chunks)
+                # The whole (already-generated) text in one call -- still
+                # gets synthesized sentence-by-sentence downstream (see
+                # server.py's SentenceChunker), just without the LLM
+                # token-streaming step this skips.
+                on_delta(prompt_text)
+        else:
+            messages, question = self._checkpoint_prompt_messages(span_id)
+            if question is not None:
+                self.awaiting_quiz_question = question
+            chunks: list[str] = []
+            for delta in self._chat_stream_fn(messages):
+                if on_delta is not None:
+                    on_delta(delta)
+                chunks.append(delta)
+            prompt_text = "".join(chunks)
+
         self.history.append(ChatTurn(role="assistant", content=prompt_text))
         self.history = self.history[-self.history_limit :]
         return SessionEvent(kind="awaiting_input", text=prompt_text)
