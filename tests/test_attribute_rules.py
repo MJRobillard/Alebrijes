@@ -83,6 +83,23 @@ def test_unresolvable_dialogue_is_unknown_with_zero_confidence() -> None:
     assert attribution.confidence == 0.0
 
 
+def test_labeled_line_with_no_speech_verb_attributes_to_named_label() -> None:
+    # No quotes and no "said"/"asked" verb for segment.py or the dependency
+    # parse to key off of -- just an ALL-CAPS "NAME:" label, e.g. a pasted
+    # dialogue exchange. Should not fall through to Unknown.
+    spans = [
+        _narration("FELICITY: Except Bayesian Optimization actually converges.", paragraph=0),
+        _narration("SARA: So if I were a hyperparameter, which one would I be?", paragraph=1),
+        _narration("FELICITY: You would be the spin speed.", paragraph=2),
+    ]
+
+    attributions = RuleBasedAttributor().attribute(spans)
+    characters = [a.character for a in attributions]
+
+    assert characters == ["Felicity", "Sara", "Felicity"]
+    assert all(a.confidence >= 0.8 for a in attributions)
+
+
 def test_narration_spans_are_never_attributed() -> None:
     spans = [
         _narration("Colin said,"),

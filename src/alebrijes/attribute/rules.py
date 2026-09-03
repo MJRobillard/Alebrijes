@@ -25,9 +25,18 @@ right most of the time and to fail loudly, not silently, the rest.
 from __future__ import annotations
 
 import functools
+import re
 
 from alebrijes.attribute import Attribution
 from alebrijes.segment import Span, SpanKind
+
+# A bare "NAME: text" label at the start of a narration span -- the same
+# ALL-CAPS convention as ingest/script.py's strict format, but appearing
+# inline in prose (no surrounding quotes for segment.py's quote-based split
+# to key off of), e.g. a pasted dialogue exchange with no narration verbs at
+# all. Matched here so those turns aren't silently left as unattributed
+# narration.
+_LABELED_LINE_RE = re.compile(r"^([A-Z][A-Z0-9' ]*):\s*(.+)$")
 
 _SPEECH_LEMMAS = {
     "say",
@@ -104,6 +113,26 @@ class RuleBasedAttributor:
 
         for index, span in enumerate(spans):
             if span.kind is SpanKind.NARRATION:
+                labeled = _LABELED_LINE_RE.match(span.text)
+                if labeled:
+                    character = labeled.group(1).strip().title()
+                    last_mentioned = character
+                    if character in speaker_history:
+                        speaker_history.remove(character)
+                    speaker_history.append(character)
+
+                    dialogue_span = Span(
+                        text=labeled.group(2).strip(),
+                        kind=SpanKind.DIALOGUE,
+                        chapter_index=span.chapter_index,
+                        paragraph_index=span.paragraph_index,
+                        span_id=span.span_id,
+                    )
+                    attributions.append(
+                        Attribution(span=dialogue_span, character=character, confidence=_NAMED_CONFIDENCE)
+                    )
+                    continue
+
                 people = _person_entities(span.text)
                 if people:
                     last_mentioned = people[-1]
