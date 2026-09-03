@@ -179,10 +179,25 @@
     <h2>Start a Lesson (live)</h2>
     <p class="hint">
       Point at a script (.script) and, optionally, a cast file (.cast.yaml — left
-      blank, one is built from the script on the fly), a quiz file (.quiz.yaml),
-      and a coffee/mystery premise (.coffee.md). No pre-rendering needed — audio
-      is synthesized as the lesson plays.
+      blank, one is built from the script on the fly). "Quiz me as it plays"
+      needs a quiz file (.quiz.yaml) too; "Advanced" exposes every mode (Coffee
+      side-quests, Checkpoints, Ask questions) and the optional coffee/mystery
+      premise. No pre-rendering needed — audio is synthesized as the lesson plays.
     </p>
+    <div class="row" style="margin-bottom: 0.7rem; gap: 1.2rem;">
+      <label style="display: flex; align-items: center; gap: 0.3rem; font-weight: 600;">
+        <input type="radio" name="lesson-type" id="lesson-type-lecture" value="lecture" checked>
+        Just play the script
+      </label>
+      <label style="display: flex; align-items: center; gap: 0.3rem; font-weight: 600;">
+        <input type="radio" name="lesson-type" id="lesson-type-quiz" value="quiz">
+        Quiz me as it plays
+      </label>
+      <label style="display: flex; align-items: center; gap: 0.3rem; font-weight: 600;">
+        <input type="radio" name="lesson-type" id="lesson-type-advanced" value="advanced">
+        Advanced
+      </label>
+    </div>
     <div class="row">
       <button id="lesson-choose-script-btn" hidden>Choose Script…</button>
       <input type="text" id="lesson-script-input" placeholder="/path/to/script.script" style="flex: 1;">
@@ -191,21 +206,23 @@
       <button id="lesson-choose-cast-btn" hidden>Choose Cast…</button>
       <input type="text" id="lesson-cast-input" placeholder="/path/to/book.cast.yaml (optional — built from the script if omitted)" style="flex: 1;">
     </div>
-    <div class="row" style="margin-top: 0.4rem;">
+    <div class="row" id="lesson-quiz-input-row" style="margin-top: 0.4rem;" hidden>
       <button id="lesson-choose-quiz-btn" hidden>Choose Quiz…</button>
-      <input type="text" id="lesson-quiz-input" placeholder="/path/to/book.quiz.yaml (optional)" style="flex: 1;">
+      <input type="text" id="lesson-quiz-input" placeholder="/path/to/book.quiz.yaml" style="flex: 1;">
     </div>
-    <div class="row" style="margin-top: 0.4rem;">
+    <div class="row" id="lesson-coffee-input-row" style="margin-top: 0.4rem;" hidden>
       <button id="lesson-choose-coffee-btn" hidden>Choose Coffee Premise…</button>
       <input type="text" id="lesson-coffee-input" placeholder="/path/to/book.coffee.md (optional)" style="flex: 1;">
     </div>
-    <div class="row" style="margin-top: 0.6rem;">
+    <div class="row" id="lesson-mode-row" style="margin-top: 0.4rem;" hidden>
       <select id="lesson-mode-select">
         <option value="learning">Learning (lesson + interrogation)</option>
         <option value="cyoa">Coffee (side-quest break)</option>
         <option value="qa">Ask questions</option>
         <option value="checkpoint">Checkpoints</option>
       </select>
+    </div>
+    <div class="row" style="margin-top: 0.6rem;">
       <select id="lesson-chat-model-select" title="Ollama chat model"></select>
       <span id="lesson-improv-turns-row" hidden>
         <label for="lesson-improv-turns-input" style="font-size: 0.85rem; color: var(--ink-soft);">Improv turns before steering back:</label>
@@ -814,11 +831,45 @@
     lessonImprovTurnsRow.hidden = lessonModeSelect.value !== "cyoa";
   });
 
+  const lessonQuizInputRow = document.getElementById("lesson-quiz-input-row");
+  const lessonCoffeeInputRow = document.getElementById("lesson-coffee-input-row");
+  const lessonModeRow = document.getElementById("lesson-mode-row");
+
+  // "Just play the script" / "Quiz me as it plays" / "Advanced" is a hard,
+  // explicit choice -- not a mode dropdown plus a separate quiz-path field
+  // you have to reason about together to realize Learning mode is the one
+  // that actually checks the quiz. Lecture forces mode=qa (never pauses for
+  // a checkpoint); Quiz forces mode=learning and requires a quiz file;
+  // Advanced un-hides the original mode dropdown/coffee field for
+  // Checkpoints/CYOA/etc.
+  function applyLessonType() {
+    const type = document.querySelector('input[name="lesson-type"]:checked').value;
+    lessonQuizInputRow.hidden = type === "lecture";
+    lessonCoffeeInputRow.hidden = type !== "advanced";
+    lessonModeRow.hidden = type !== "advanced";
+    if (type === "lecture") {
+      lessonModeSelect.value = "qa";
+    } else if (type === "quiz") {
+      lessonModeSelect.value = "learning";
+    }
+    lessonImprovTurnsRow.hidden = lessonModeSelect.value !== "cyoa";
+  }
+  document.querySelectorAll('input[name="lesson-type"]').forEach(function (radio) {
+    radio.addEventListener("change", applyLessonType);
+  });
+  applyLessonType();
+
   startLessonBtn.addEventListener("click", function () {
+    const lessonType = document.querySelector('input[name="lesson-type"]:checked').value;
     const scriptPath = lessonScriptInput.value.trim();
     const castPath = lessonCastInput.value.trim();
+    const quizPath = lessonQuizInput.value.trim();
     if (!scriptPath) {
       lessonStatusEl.textContent = "Script path is required.";
+      return;
+    }
+    if (lessonType === "quiz" && !quizPath) {
+      lessonStatusEl.textContent = "Quiz mode needs a quiz file (.quiz.yaml) — set one, or switch to “Just play the script.”";
       return;
     }
     startLessonBtn.disabled = true;
@@ -833,7 +884,7 @@
         mode: mode,
         chat_model: lessonChatModelSelect.value || null,
         max_improv_exchanges: mode === "cyoa" ? (parseInt(lessonImprovTurnsInput.value, 10) || null) : null,
-        quiz_path: lessonQuizInput.value.trim() || null,
+        quiz_path: quizPath || null,
         coffee_path: lessonCoffeeInput.value.trim() || null,
         lookahead_chapters: 3,
       }),
@@ -990,25 +1041,37 @@
   }
 
   function showLessonQuizPanel(promptText, choices) {
-    // Dedicated quiz UI: A-D answer buttons plus its own free-text box,
-    // shown instead of the generic chat row while a quiz question is
-    // pending -- one place to respond during a quiz, not two.
+    // Dedicated quiz UI: A-D as radio options (pick one, then Submit --
+    // not an instant-send-on-click button, so a stray click doesn't lock
+    // in an answer) plus its own free-text box, shown instead of the
+    // generic chat row while a quiz question is pending -- one place to
+    // respond during a quiz, not two.
     lessonChatRow.hidden = true;
     lessonQuizPromptEl.textContent = promptText;
     lessonQuizChoicesRow.innerHTML = "";
     Object.keys(choices).forEach(function (key) {
-      const btn = document.createElement("button");
-      btn.textContent = key + ") " + choices[key];
-      btn.addEventListener("click", function () {
-        sendLessonChatMessage(key);
-      });
-      lessonQuizChoicesRow.appendChild(btn);
+      const label = document.createElement("label");
+      label.style.cssText = "display: flex; align-items: center; gap: 0.4rem;";
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "lesson-quiz-choice";
+      radio.value = key;
+      label.appendChild(radio);
+      label.appendChild(document.createTextNode(key + ") " + choices[key]));
+      lessonQuizChoicesRow.appendChild(label);
     });
+    const submitBtn = document.createElement("button");
+    submitBtn.id = "lesson-quiz-choice-submit-btn";
+    submitBtn.textContent = "Submit Answer";
+    submitBtn.addEventListener("click", function () {
+      const picked = lessonQuizChoicesRow.querySelector("input[name='lesson-quiz-choice']:checked");
+      if (picked) sendLessonChatMessage(picked.value);
+    });
+    lessonQuizChoicesRow.appendChild(submitBtn);
     lessonQuizPanel.hidden = false;
     lessonQuizTextInput.value = "";
     lessonQuizTextInput.disabled = false;
     lessonQuizTextSendBtn.disabled = false;
-    lessonQuizTextInput.focus();
   }
 
   function hideLessonQuizPanel() {
@@ -1043,7 +1106,7 @@
     lessonChatSendBtn.disabled = true;
     lessonQuizTextInput.disabled = true;
     lessonQuizTextSendBtn.disabled = true;
-    lessonQuizChoicesRow.querySelectorAll("button").forEach(function (btn) { btn.disabled = true; });
+    lessonQuizChoicesRow.querySelectorAll("button, input").forEach(function (el) { el.disabled = true; });
     lessonState.ws.send(JSON.stringify({ type: "chat", text: text }));
   }
 })();
