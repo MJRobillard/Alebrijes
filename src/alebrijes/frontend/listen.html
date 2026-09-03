@@ -648,7 +648,10 @@
         appendChatTurn("narrator", message.text);
         chatInput.disabled = false;
         chatSendBtn.disabled = false;
-        if (player.paused === false) { /* main narration kept playing (QA mode) */ }
+        // A checkpoint/quiz reaction pauses narration (awaiting_input,
+        // below) until answered -- resume it now that a reply landed. A
+        // plain QA-mode question never paused it, so this is a no-op then.
+        if (player.paused) player.play();
       } else if (message.type === "awaiting_input") {
         player.pause();
         appendChatTurn("narrator", message.text);
@@ -895,6 +898,11 @@
         lessonChatInput.disabled = false;
         lessonChatSendBtn.disabled = false;
         refreshLessonScore();
+        // A checkpoint/quiz question pauses narration (awaiting_input,
+        // above) until answered -- resume it now that a reply landed. A
+        // plain question typed mid-narration never paused it, so this is
+        // a no-op then.
+        if (lessonPlayer.paused) lessonPlayer.play();
       } else if (message.type === "audio_chunk") {
         if (message.text) appendChatTurnTo(lessonChatLog, "live", message.character + ": " + message.text);
         lessonResponsePlayer.push(message.data);
