@@ -220,7 +220,14 @@
     <audio id="lesson-player" controls hidden style="margin-top: 0.5rem;"></audio>
     <div id="lesson-transcript"></div>
     <div id="lesson-chat-log" style="margin-top: 0.75rem; max-height: 30vh; overflow-y: auto;" hidden></div>
-    <div class="row" id="lesson-choices-row" hidden style="margin-top: 0.5rem;"></div>
+    <div id="lesson-quiz-panel" hidden style="margin-top: 0.75rem; border: 1px solid var(--line); border-radius: 6px; padding: 0.75rem;">
+      <div id="lesson-quiz-prompt" style="font-weight: 600; margin-bottom: 0.6rem;"></div>
+      <div class="row" id="lesson-quiz-choices-row" style="margin-bottom: 0.6rem;"></div>
+      <div class="row">
+        <input type="text" id="lesson-quiz-text-input" placeholder="Or type your answer/question…" style="flex: 1;">
+        <button id="lesson-quiz-text-send-btn">Send</button>
+      </div>
+    </div>
     <div class="row" id="lesson-chat-row" hidden style="margin-top: 0.75rem;">
       <input type="text" id="lesson-chat-input" placeholder="Type your answer or question…" style="flex: 1;">
       <button id="lesson-chat-send-btn">Send</button>
@@ -763,7 +770,11 @@
   const lessonPlayer = document.getElementById("lesson-player");
   const lessonTranscriptEl = document.getElementById("lesson-transcript");
   const lessonChatLog = document.getElementById("lesson-chat-log");
-  const lessonChoicesRow = document.getElementById("lesson-choices-row");
+  const lessonQuizPanel = document.getElementById("lesson-quiz-panel");
+  const lessonQuizPromptEl = document.getElementById("lesson-quiz-prompt");
+  const lessonQuizChoicesRow = document.getElementById("lesson-quiz-choices-row");
+  const lessonQuizTextInput = document.getElementById("lesson-quiz-text-input");
+  const lessonQuizTextSendBtn = document.getElementById("lesson-quiz-text-send-btn");
   const lessonChatRow = document.getElementById("lesson-chat-row");
   const lessonChatInput = document.getElementById("lesson-chat-input");
   const lessonChatSendBtn = document.getElementById("lesson-chat-send-btn");
@@ -870,13 +881,17 @@
       } else if (message.type === "awaiting_input") {
         lessonPlayer.pause();
         appendChatTurnTo(lessonChatLog, "narrator", message.text);
-        showLessonChoices(message.choices || null);
-        lessonChatInput.disabled = false;
-        lessonChatSendBtn.disabled = false;
-        lessonChatInput.focus();
+        if (message.choices) {
+          showLessonQuizPanel(message.text, message.choices);
+        } else {
+          hideLessonQuizPanel();
+          lessonChatInput.disabled = false;
+          lessonChatSendBtn.disabled = false;
+          lessonChatInput.focus();
+        }
       } else if (message.type === "answer") {
         appendChatTurnTo(lessonChatLog, "narrator", message.text);
-        showLessonChoices(null);
+        hideLessonQuizPanel();
         lessonChatInput.disabled = false;
         lessonChatSendBtn.disabled = false;
         refreshLessonScore();
@@ -885,6 +900,7 @@
         lessonResponsePlayer.push(message.data);
       } else if (message.type === "error") {
         appendChatTurnTo(lessonChatLog, "narrator", "Error: " + message.detail);
+        hideLessonQuizPanel();
         lessonChatInput.disabled = false;
         lessonChatSendBtn.disabled = false;
         lessonRenderProgressEl.hidden = true;
@@ -965,21 +981,32 @@
     lessonTranscriptEl.appendChild(frag);
   }
 
-  function showLessonChoices(choices) {
-    lessonChoicesRow.innerHTML = "";
-    if (!choices) {
-      lessonChoicesRow.hidden = true;
-      return;
-    }
-    lessonChoicesRow.hidden = false;
+  function showLessonQuizPanel(promptText, choices) {
+    // Dedicated quiz UI: A-D answer buttons plus its own free-text box,
+    // shown instead of the generic chat row while a quiz question is
+    // pending -- one place to respond during a quiz, not two.
+    lessonChatRow.hidden = true;
+    lessonQuizPromptEl.textContent = promptText;
+    lessonQuizChoicesRow.innerHTML = "";
     Object.keys(choices).forEach(function (key) {
       const btn = document.createElement("button");
       btn.textContent = key + ") " + choices[key];
       btn.addEventListener("click", function () {
         sendLessonChatMessage(key);
       });
-      lessonChoicesRow.appendChild(btn);
+      lessonQuizChoicesRow.appendChild(btn);
     });
+    lessonQuizPanel.hidden = false;
+    lessonQuizTextInput.value = "";
+    lessonQuizTextInput.disabled = false;
+    lessonQuizTextSendBtn.disabled = false;
+    lessonQuizTextInput.focus();
+  }
+
+  function hideLessonQuizPanel() {
+    lessonQuizPanel.hidden = true;
+    lessonQuizChoicesRow.innerHTML = "";
+    lessonChatRow.hidden = false;
   }
 
   function refreshLessonScore() {
@@ -995,13 +1022,20 @@
     if (evt.key === "Enter") sendLessonChatMessage(lessonChatInput.value.trim());
   });
 
+  lessonQuizTextSendBtn.addEventListener("click", function () { sendLessonChatMessage(lessonQuizTextInput.value.trim()); });
+  lessonQuizTextInput.addEventListener("keydown", function (evt) {
+    if (evt.key === "Enter") sendLessonChatMessage(lessonQuizTextInput.value.trim());
+  });
+
   function sendLessonChatMessage(text) {
     if (!text || !lessonState.ws || lessonState.ws.readyState !== WebSocket.OPEN) return;
     appendChatTurnTo(lessonChatLog, "user", text);
     lessonChatInput.value = "";
     lessonChatInput.disabled = true;
     lessonChatSendBtn.disabled = true;
-    showLessonChoices(null);
+    lessonQuizTextInput.disabled = true;
+    lessonQuizTextSendBtn.disabled = true;
+    lessonQuizChoicesRow.querySelectorAll("button").forEach(function (btn) { btn.disabled = true; });
     lessonState.ws.send(JSON.stringify({ type: "chat", text: text }));
   }
 })();

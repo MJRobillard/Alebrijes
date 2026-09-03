@@ -30,6 +30,11 @@ class QuizQuestion:
     prompt: str
     options: dict[str, str]  # {"A": "...", "B": "...", ...}
     correct: str  # a key of `options`
+    # Optional author-written reaction for a correct answer, spoken instead
+    # of going through the LLM (see session/__init__.py's handle_user_message
+    # -- a correct answer is graded deterministically and never needs the
+    # LLM to author a reaction). Falls back to a generic rotation when unset.
+    praise: Optional[str] = None
 
 
 @dataclass
@@ -59,6 +64,7 @@ def load_quiz(path: Path) -> dict[str, QuizQuestion]:
             prompt=question["prompt"],
             options=question["options"],
             correct=question["correct"],
+            praise=question.get("praise"),
         )
         for question_id, question in questions.items()
     }

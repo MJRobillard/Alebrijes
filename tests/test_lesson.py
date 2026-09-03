@@ -33,6 +33,26 @@ def test_load_quiz_parses_questions_by_id(tmp_path: Path) -> None:
     assert questions["q1"].prompt == "What is an IAM role?"
     assert questions["q1"].options == {"A": "A user", "B": "A delegated identity"}
     assert questions["q1"].correct == "B"
+    assert questions["q1"].praise is None
+
+
+def test_load_quiz_parses_optional_praise(tmp_path: Path) -> None:
+    path = tmp_path / "book.quiz.yaml"
+    path.write_text(
+        "questions:\n"
+        "  q1:\n"
+        "    prompt: \"What is an IAM role?\"\n"
+        "    options:\n"
+        "      A: \"A user\"\n"
+        "      B: \"A delegated identity\"\n"
+        "    correct: B\n"
+        "    praise: \"You nailed it.\"\n",
+        encoding="utf-8",
+    )
+
+    questions = load_quiz(path)
+
+    assert questions["q1"].praise == "You nailed it."
 
 
 def test_load_quiz_on_empty_file_returns_empty_dict(tmp_path: Path) -> None:

@@ -30,6 +30,11 @@ DEFAULT_HISTORY_LIMIT = 8
 DEFAULT_MAX_IMPROV_EXCHANGES = 3
 DEFAULT_TOP_K = 5
 
+# Fallback for a correct quiz answer with no per-question QuizQuestion.praise
+# (see InteractiveSession._pick_praise) -- rotated through so a run of
+# correct answers doesn't repeat the same line every time.
+_GENERIC_PRAISE = ["Correct.", "That's it.", "Exactly right.", "Well done."]
+
 __all__ = [
     "SessionMode",
     "SessionState",
@@ -106,6 +111,7 @@ class InteractiveSession:
         self.state = SessionState.PLAYING
         self.history: list[ChatTurn] = []
         self.improv_exchange_count = 0
+        self._praise_rotation_index = 0
 
     @property
     def current_seq(self) -> int:
@@ -199,13 +205,15 @@ class InteractiveSession:
             f"different question:\n{question.prompt}\n{options_block}"
         )
 
-    def _grade_quiz_answer(self, choice: str) -> str:
-        """Grades `choice` against the pending question, updates and
-        persists `quiz_progress`, clears `awaiting_quiz_question`, and
-        returns a note describing the result for the LLM to react to (the
-        grade itself is decided here, deterministically -- the LLM never
-        judges correctness, only reacts to it; see narrator_guidelines.md's
-        existing "react to what they actually said" rule)."""
+    def _grade_quiz_answer(self, choice: str) -> tuple[bool, QuizQuestion]:
+        """Grades `choice` against the pending question, deterministically
+        (the LLM never judges correctness), updates and persists
+        `quiz_progress`, and clears `awaiting_quiz_question`.
+
+        See `handle_user_message` for what happens with the result: a
+        correct answer skips the LLM entirely (nothing here needs
+        authoring); an incorrect one gets `_incorrect_note`'s instructive
+        note for the LLM to react to."""
         question = self.awaiting_quiz_question
         assert question is not None
         is_correct = choice == question.correct
@@ -218,15 +226,26 @@ class InteractiveSession:
         if self.quiz_progress_path is not None:
             save_progress(self.quiz_progress, self.quiz_progress_path)
         self.awaiting_quiz_question = None
+        return is_correct, question
 
-        if is_correct:
-            return f"(the listener answered {choice}, which is correct. React in character.)"
+    @staticmethod
+    def _incorrect_note(choice: str, question: QuizQuestion) -> str:
         correct_text = question.options.get(question.correct, "")
         return (
             f"(the listener answered {choice}, which is incorrect -- the correct "
             f"answer was {question.correct}) {correct_text}. React in character to "
             "their specific answer, gently correcting the misconception.)"
         )
+
+    def _pick_praise(self, question: QuizQuestion) -> str:
+        """An author-written `praise` on the question wins; otherwise
+        rotate through a small generic list so consecutive correct answers
+        don't all get the identical line."""
+        if question.praise:
+            return question.praise
+        praise = _GENERIC_PRAISE[self._praise_rotation_index % len(_GENERIC_PRAISE)]
+        self._praise_rotation_index += 1
+        return praise
 
     def handle_user_message(
         self, user_message: str, *, on_delta: Optional[Callable[[str], None]] = None
@@ -249,7 +268,23 @@ class InteractiveSession:
         if self.awaiting_quiz_question is not None:
             choice = parse_choice(user_message)
             if choice is not None:
-                effective_message = self._grade_quiz_answer(choice)
+                is_correct, question = self._grade_quiz_answer(choice)
+                if is_correct:
+                    # Deterministic grade -- nothing here needs the LLM to
+                    # author a reaction. Feed the praise through on_delta
+                    # directly so it's still synthesized/streamed as audio
+                    # via the exact same pipeline a real LLM response uses
+                    # (server.py's _speak_llm_call), just without the
+                    # network round-trip.
+                    praise = self._pick_praise(question)
+                    if on_delta is not None:
+                        on_delta(praise)
+                    self.history.append(ChatTurn(role="user", content=user_message))
+                    self.history.append(ChatTurn(role="assistant", content=praise))
+                    self.history = self.history[-self.history_limit :]
+                    self.state = SessionState.PLAYING
+                    return SessionEvent(kind="answer", text=praise, sources=[])
+                effective_message = self._incorrect_note(choice, question)
 
         hits = self._retrieve(user_message)
         rag_excerpts = [hit.entry.text for hit in hits]

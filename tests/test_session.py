@@ -304,7 +304,7 @@ def test_incorrect_choice_grades_incorrect() -> None:
     assert session.quiz_progress.score == (0, 1)
 
 
-def test_grading_note_not_raw_user_text_is_sent_to_the_llm() -> None:
+def test_incorrect_answer_grading_note_not_raw_user_text_is_sent_to_the_llm() -> None:
     calls = []
     session = _session(
         mode=SessionMode.LEARNING,
@@ -316,13 +316,70 @@ def test_grading_note_not_raw_user_text_is_sent_to_the_llm() -> None:
     session.advance_position("0.2.0")
     calls.clear()
 
-    session.handle_user_message("I think B")
+    session.handle_user_message("I think A")
 
     prompt_sent = calls[0][-1]["content"]
-    assert prompt_sent != "I think B"
-    assert "correct" in prompt_sent.lower()
+    assert prompt_sent != "I think A"
+    assert "incorrect" in prompt_sent.lower()
     # The raw text the listener actually said is still what's recorded in history.
+    assert session.history[-2].content == "I think A"
+
+
+def test_correct_answer_skips_the_llm_and_speaks_praise_via_on_delta() -> None:
+    calls = []
+    deltas = []
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+        chat_calls=calls,
+    )
+    session.advance_position("0.2.0")
+    calls.clear()
+
+    event = session.handle_user_message("I think B", on_delta=deltas.append)
+
+    assert calls == []  # no LLM round-trip for a deterministically-correct answer
+    assert deltas == [event.text]
+    assert event.kind == "answer"
+    assert event.text  # the (rotated, or per-question) praise line
     assert session.history[-2].content == "I think B"
+    assert session.history[-1].content == event.text
+    assert session.state == SessionState.PLAYING
+
+
+def test_correct_answer_uses_per_question_praise_when_set() -> None:
+    question = QuizQuestion(
+        id="q1", prompt="What is an IAM role?", options={"A": "A user", "B": "A delegated identity"},
+        correct="B", praise="You nailed it, as usual.",
+    )
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": question},
+    )
+    session.advance_position("0.2.0")
+
+    event = session.handle_user_message("B")
+
+    assert event.text == "You nailed it, as usual."
+
+
+def test_correct_answer_praise_rotates_through_generic_list_without_repeating_first_two() -> None:
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0", "0.3.0"],
+        quiz_checkpoints={"0.2.0": "q1", "0.3.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+    )
+    session.advance_position("0.2.0")
+    first = session.handle_user_message("B").text
+    session.advance_position("0.3.0")
+    second = session.handle_user_message("B").text
+
+    assert first != second
 
 
 def test_unparseable_answer_leaves_question_pending() -> None:
