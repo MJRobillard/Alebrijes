@@ -215,6 +215,7 @@
       <span id="lesson-status" class="status"></span>
     </div>
     <div id="lesson-score" class="status" hidden style="margin-top: 0.5rem; font-weight: 600;"></div>
+    <div id="lesson-render-progress" class="status" hidden style="margin-top: 0.5rem;"></div>
     <div id="lesson-book-title" style="font-weight: 600; margin-top: 0.75rem;"></div>
     <audio id="lesson-player" controls hidden style="margin-top: 0.5rem;"></audio>
     <div id="lesson-transcript"></div>
@@ -757,6 +758,7 @@
   const startLessonBtn = document.getElementById("start-lesson-btn");
   const lessonStatusEl = document.getElementById("lesson-status");
   const lessonScoreEl = document.getElementById("lesson-score");
+  const lessonRenderProgressEl = document.getElementById("lesson-render-progress");
   const lessonBookTitleEl = document.getElementById("lesson-book-title");
   const lessonPlayer = document.getElementById("lesson-player");
   const lessonTranscriptEl = document.getElementById("lesson-transcript");
@@ -859,6 +861,12 @@
         lessonState.chapterQueue.push(message);
         renderLessonChapterSpans(message.spans);
         if (!lessonState.playingChapter) playNextLessonChapter();
+        lessonRenderProgressEl.hidden = true;
+      } else if (message.type === "chapter_progress") {
+        lessonRenderProgressEl.hidden = false;
+        lessonRenderProgressEl.textContent =
+          "Rendering chapter " + (message.chapter_index + 1) + "… line " +
+          message.lines_done + " / " + message.lines_total;
       } else if (message.type === "awaiting_input") {
         lessonPlayer.pause();
         appendChatTurnTo(lessonChatLog, "narrator", message.text);
@@ -879,6 +887,7 @@
         appendChatTurnTo(lessonChatLog, "narrator", "Error: " + message.detail);
         lessonChatInput.disabled = false;
         lessonChatSendBtn.disabled = false;
+        lessonRenderProgressEl.hidden = true;
       }
     });
   }

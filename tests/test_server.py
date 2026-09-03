@@ -999,6 +999,17 @@ def _fake_build_render_pipeline(cast_file):
     return _FakeSynthAgent(), {"Narrator": ("alba", object())}
 
 
+def _receive_skipping_progress(ws):
+    """Reads websocket frames until one that isn't a chapter_progress
+    update -- those interleave unpredictably with chapter_ready/other
+    frames (both stream off the same background renderer thread via
+    separate queues), so tests that don't care about progress skip them."""
+    while True:
+        message = ws.receive_json()
+        if message["type"] != "chapter_progress":
+            return message
+
+
 def test_session_start_live_returns_session_id_and_spoken_true(tmp_path: Path) -> None:
     client = _client(
         ingest_book=lambda path: _fixture_book(),
@@ -1053,8 +1064,8 @@ def test_session_ws_live_streams_chapters_as_they_render(tmp_path: Path) -> None
     session_id = start.json()["session_id"]
 
     with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
-        first = ws.receive_json()
-        second = ws.receive_json()
+        first = _receive_skipping_progress(ws)
+        second = _receive_skipping_progress(ws)
 
     assert first["type"] == "chapter_ready"
     assert second["type"] == "chapter_ready"
@@ -1065,6 +1076,37 @@ def test_session_ws_live_streams_chapters_as_they_render(tmp_path: Path) -> None
     wav_bytes = base64.b64decode(first["data"])
     with wave.open(io.BytesIO(wav_bytes)) as handle:
         assert handle.getnframes() > 0
+
+
+def test_session_ws_live_sends_chapter_progress_while_rendering(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
+
+    client = _client(
+        ingest_book=lambda path: _fixture_book(),  # 2 chapters, 1 line each
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=_fake_chat_stream,
+        build_render_pipeline_fn=_fake_build_render_pipeline,
+    )
+    start = client.post(
+        "/api/session/start_live",
+        headers=_headers(),
+        json={"book": "unused.epub", "cast": str(cast_path), "lookahead_chapters": 5},
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        # 2 chapter_progress (one line each) + 2 chapter_ready -- order between
+        # the two streams isn't guaranteed, so just collect all four.
+        messages = [ws.receive_json() for _ in range(4)]
+
+    types = [m["type"] for m in messages]
+    assert types.count("chapter_progress") == 2
+    assert types.count("chapter_ready") == 2
+    progress = next(m for m in messages if m["type"] == "chapter_progress")
+    assert progress["lines_done"] == 1
+    assert progress["lines_total"] == 1
+    assert progress["chapter_index"] in (0, 1)
 
 
 def test_session_ws_live_chapter_consumed_advances_lookahead(tmp_path: Path) -> None:
@@ -1085,11 +1127,11 @@ def test_session_ws_live_chapter_consumed_advances_lookahead(tmp_path: Path) -> 
     session_id = start.json()["session_id"]
 
     with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
-        first = ws.receive_json()
+        first = _receive_skipping_progress(ws)
         assert first["chapter_index"] == 0
 
         ws.send_json({"type": "chapter_consumed", "chapter_index": 0})
-        second = ws.receive_json()
+        second = _receive_skipping_progress(ws)
         assert second["chapter_index"] == 1
 
 
@@ -1166,7 +1208,7 @@ def test_session_start_live_with_quiz_path_merges_script_quiz_checkpoints(tmp_pa
     session_id = start.json()["session_id"]
 
     with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
-        chapter_ready = ws.receive_json()
+        chapter_ready = _receive_skipping_progress(ws)
         assert chapter_ready["type"] == "chapter_ready"
 
         ws.send_json({"type": "position", "span_id": "0.0.0"})

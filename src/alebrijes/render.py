@@ -130,22 +130,32 @@ def synthesize_chapter(
     voice_states: dict[str, tuple[str, object]],
     agent: TTSAgent,
     pause_ms: int = DEFAULT_PAUSE_MS,
+    on_line_done: Callable[[int, int], None] | None = None,
 ) -> tuple[np.ndarray, list[SpanTiming]]:
     """Synthesizes every span in order, swapping voices per line as needed.
 
     Returns the concatenated chapter audio plus each span's (start_ms, end_ms)
     within that audio (pauses excluded from the span's own span, but counted
     toward the cursor so later spans still land at their real offset).
+
+    `on_line_done(completed, total)`, if given, is called after each span
+    finishes synthesizing -- a whole chapter can be many long, sequential
+    TTS calls (no line-level output otherwise until the *entire* chapter is
+    done), so this is the only way a caller streaming this live gets any
+    progress signal before then.
     """
     rendered: list[np.ndarray] = []
     timings: list[SpanTiming] = []
     pause_samples = int(agent.sample_rate * (pause_ms / 1000.0))
     cursor_samples = 0
+    total_spans = len(voiced_spans)
 
-    for voiced in voiced_spans:
+    for line_index, voiced in enumerate(voiced_spans, start=1):
         voice_prompt, state = voice_states[voiced.character]
         agent.use_voice_state(voice_prompt, state)
         audio = agent.synthesize(voiced.span.text)
+        if on_line_done is not None:
+            on_line_done(line_index, total_spans)
         if audio.size == 0:
             continue
         start_ms = round(cursor_samples / agent.sample_rate * 1000)

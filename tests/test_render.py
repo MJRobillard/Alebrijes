@@ -214,6 +214,26 @@ def test_synthesize_chapter_inserts_silence_between_lines() -> None:
     assert audio.size == (4 + 250) * 2
 
 
+def test_synthesize_chapter_calls_on_line_done_after_each_line() -> None:
+    from alebrijes.render import VoicedSpan
+    from alebrijes.segment import Span
+
+    voiced_spans = [
+        VoicedSpan(Span("One.", SpanKind.NARRATION, 0, 0, "0.0.0"), NARRATOR, "alba"),
+        VoicedSpan(Span("Two.", SpanKind.NARRATION, 0, 1, "0.1.0"), NARRATOR, "alba"),
+        VoicedSpan(Span("Three.", SpanKind.NARRATION, 0, 2, "0.2.0"), NARRATOR, "alba"),
+    ]
+    voice_states = {NARRATOR: ("alba", object())}
+    agent = _RecordingAgent()
+    progress: list[tuple[int, int]] = []
+
+    synthesize_chapter(
+        voiced_spans, voice_states, agent, pause_ms=0, on_line_done=lambda done, total: progress.append((done, total))
+    )
+
+    assert progress == [(1, 3), (2, 3), (3, 3)]
+
+
 def test_synthesize_chapter_raises_when_nothing_rendered() -> None:
     agent = _RecordingAgent()
 

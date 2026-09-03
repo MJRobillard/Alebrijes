@@ -852,6 +852,16 @@ def create_app(
             # marker so _drain_chapters can turn it into a real error frame.
             chapter_queue.put(_ChapterRenderError(chapter_index, exc))
 
+        # A chapter can be many long, sequential TTS calls with no other
+        # output until the *whole* chapter finishes (see synthesize_chapter's
+        # on_line_done docstring) -- this queue carries a
+        # (chapter_index, lines_done, lines_total) tuple per line so the
+        # client isn't just staring at a stalled 0:00 the entire time.
+        progress_queue: "queue_module.Queue" = queue_module.Queue()
+
+        def on_line_progress(chapter_index: int, lines_done: int, lines_total: int) -> None:
+            progress_queue.put((chapter_index, lines_done, lines_total))
+
         renderer = LookaheadRenderer(
             book,
             cast_file,
@@ -860,6 +870,7 @@ def create_app(
             lookahead_chapters=payload.lookahead_chapters,
             on_chapter_ready=on_chapter_ready,
             on_error=on_render_error,
+            on_line_progress=on_line_progress,
         )
         renderer.start()
 
@@ -869,6 +880,7 @@ def create_app(
             "agent": agent,
             "renderer": renderer,
             "chapter_queue": chapter_queue,
+            "progress_queue": progress_queue,
         }
 
         return SessionStartResponse(session_id=session_id, book_title=book.title, spoken=True)
@@ -902,6 +914,7 @@ def create_app(
         agent = entry["agent"]
         renderer = entry.get("renderer")
         chapter_queue = entry.get("chapter_queue")
+        progress_queue = entry.get("progress_queue")
 
         # Two coroutines can both push frames on this socket -- the request/
         # response loop below, and (for a live session) the chapter-drain
@@ -1004,7 +1017,23 @@ def create_app(
                     }
                 )
 
+        async def _drain_progress() -> None:
+            # Same thread -> queue.Queue -> run_in_threadpool bridge as
+            # _drain_chapters, for the per-line progress LookaheadRenderer
+            # reports while still inside one (possibly long) chapter.
+            while True:
+                chapter_index, lines_done, lines_total = await run_in_threadpool(progress_queue.get)
+                await _send(
+                    {
+                        "type": "chapter_progress",
+                        "chapter_index": chapter_index,
+                        "lines_done": lines_done,
+                        "lines_total": lines_total,
+                    }
+                )
+
         drain_task = asyncio.create_task(_drain_chapters()) if chapter_queue is not None else None
+        progress_drain_task = asyncio.create_task(_drain_progress()) if progress_queue is not None else None
 
         try:
             while True:
@@ -1048,6 +1077,8 @@ def create_app(
         finally:
             if drain_task is not None:
                 drain_task.cancel()
+            if progress_drain_task is not None:
+                progress_drain_task.cancel()
             if renderer is not None:
                 renderer.stop()
             sessions.pop(session_id, None)

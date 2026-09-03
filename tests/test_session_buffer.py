@@ -26,7 +26,7 @@ def _fake_resolve(chapter, cast_file, *, script_format=False):
     return [f"span-for-{chapter.index}"]
 
 
-def _fake_synthesize(voiced_spans, voice_states, agent, pause_ms=250):
+def _fake_synthesize(voiced_spans, voice_states, agent, pause_ms=250, on_line_done=None):
     return np.array([1, 2, 3], dtype=np.int16), [f"timing-{voiced_spans[0]}"]
 
 
@@ -106,6 +106,32 @@ def test_on_chapter_ready_receives_chapters_in_order() -> None:
         renderer.stop()
 
 
+def test_on_line_progress_receives_per_line_updates_from_synthesize_chapter() -> None:
+    def _synthesize_with_progress(voiced_spans, voice_states, agent, pause_ms=250, on_line_done=None):
+        if on_line_done is not None:
+            on_line_done(1, 2)
+            on_line_done(2, 2)
+        return np.array([1, 2, 3], dtype=np.int16), [f"timing-{voiced_spans[0]}"]
+
+    progress: list[tuple[int, int, int]] = []
+    renderer = LookaheadRenderer(
+        _book(1),
+        CastFile(book_title="Fixture"),
+        voice_states={},
+        agent=_FakeAgent(),
+        lookahead_chapters=5,
+        resolve_chapter_spans_fn=_fake_resolve,
+        synthesize_chapter_fn=_synthesize_with_progress,
+        on_line_progress=lambda chapter_index, done, total: progress.append((chapter_index, done, total)),
+    )
+    try:
+        renderer.start()
+        assert _wait_until(lambda: len(progress) == 2)
+        assert progress == [(0, 1, 2), (0, 2, 2)]
+    finally:
+        renderer.stop()
+
+
 def test_stop_halts_a_blocked_renderer_promptly() -> None:
     renderer = LookaheadRenderer(
         _book(5),
@@ -125,7 +151,7 @@ def test_stop_halts_a_blocked_renderer_promptly() -> None:
 
 
 def test_synthesis_error_is_captured_not_raised_in_background_thread() -> None:
-    def _raising_synthesize(voiced_spans, voice_states, agent, pause_ms=250):
+    def _raising_synthesize(voiced_spans, voice_states, agent, pause_ms=250, on_line_done=None):
         raise RuntimeError("synthesis exploded")
 
     renderer = LookaheadRenderer(
@@ -146,7 +172,7 @@ def test_synthesis_error_is_captured_not_raised_in_background_thread() -> None:
 
 
 def test_synthesis_error_invokes_on_error_with_failing_chapter_index() -> None:
-    def _raising_synthesize(voiced_spans, voice_states, agent, pause_ms=250):
+    def _raising_synthesize(voiced_spans, voice_states, agent, pause_ms=250, on_line_done=None):
         raise RuntimeError("synthesis exploded")
 
     errors: list[tuple[int, Exception]] = []

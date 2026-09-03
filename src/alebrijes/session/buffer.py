@@ -50,6 +50,7 @@ class LookaheadRenderer:
         pause_ms: int = 250,
         on_chapter_ready: Optional[Callable[[ChapterAudio], None]] = None,
         on_error: Optional[Callable[[int, Exception], None]] = None,
+        on_line_progress: Optional[Callable[[int, int, int], None]] = None,
         resolve_chapter_spans_fn: Callable = resolve_chapter_spans,
         synthesize_chapter_fn: Callable = synthesize_chapter,
     ) -> None:
@@ -61,6 +62,11 @@ class LookaheadRenderer:
         self._pause_ms = pause_ms
         self._on_chapter_ready = on_chapter_ready
         self._on_error = on_error
+        # (chapter_index, lines_done, lines_total) -- fires per span within
+        # the chapter currently being synthesized, since on_chapter_ready
+        # only fires once the *whole* chapter is done (see synthesize_chapter's
+        # on_line_done docstring).
+        self._on_line_progress = on_line_progress
         self._resolve_chapter_spans = resolve_chapter_spans_fn
         self._synthesize_chapter = synthesize_chapter_fn
 
@@ -114,8 +120,17 @@ class LookaheadRenderer:
                 voiced_spans = self._resolve_chapter_spans(
                     chapter, self._cast_file, script_format=self._book.source_format == "script"
                 )
+
+                def _on_line_done(lines_done: int, lines_total: int, chapter_index=chapter.index) -> None:
+                    if self._on_line_progress is not None:
+                        self._on_line_progress(chapter_index, lines_done, lines_total)
+
                 audio, timings = self._synthesize_chapter(
-                    voiced_spans, self._voice_states, self._agent, pause_ms=self._pause_ms
+                    voiced_spans,
+                    self._voice_states,
+                    self._agent,
+                    pause_ms=self._pause_ms,
+                    on_line_done=_on_line_done,
                 )
             except Exception as exc:  # noqa: BLE001 - surfaced via .error, not crashing the thread
                 with self._cond:
