@@ -248,6 +248,11 @@ class SessionStartResponse(BaseModel):
     spoken: bool  # whether a narrator TTS agent was available for spoken responses
 
 
+class SessionScoreResponse(BaseModel):
+    correct: int
+    total: int
+
+
 class SessionStartLiveRequest(BaseModel):
     book: str
     cast: str
@@ -258,6 +263,8 @@ class SessionStartLiveRequest(BaseModel):
     max_improv_exchanges: Optional[int] = None
     rag_npz: Optional[str] = None
     rag_json: Optional[str] = None
+    quiz_path: Optional[str] = None  # <name>.quiz.yaml; progress persists to its .progress.json sibling
+    coffee_path: Optional[str] = None  # <name>.coffee.md, free-form CYOA/"coffee mode" premise
 
 
 IngestFn = Callable[[Path], Book]
@@ -739,6 +746,7 @@ def create_app(
         # LookaheadRenderer's output (see session/buffer.py).
         import queue as queue_module
 
+        from alebrijes import lesson
         from alebrijes.rag import RagIndex, load as load_rag_index
         from alebrijes.session.buffer import LookaheadRenderer
 
@@ -770,6 +778,26 @@ def create_app(
             if npz_path.exists() and json_path.exists():
                 rag_index = load_rag_index(npz_path, json_path)
 
+        # Lesson mode: a quiz file's questions are looked up by the span_ids
+        # ingest/script.py already collected from the script's own `QUIZ:`
+        # markers (book.quiz_checkpoints) -- the author declares a quiz
+        # position once, in the script, not again in this request.
+        quiz_questions: dict = {}
+        quiz_progress_path: Optional[Path] = None
+        checkpoints = list(payload.checkpoints)
+        if payload.quiz_path:
+            quiz_file_path = Path(payload.quiz_path)
+            if quiz_file_path.exists():
+                quiz_questions = lesson.load_quiz(quiz_file_path)
+                quiz_progress_path = quiz_file_path.with_suffix(".progress.json")
+                checkpoints = list(dict.fromkeys(checkpoints + list(book.quiz_checkpoints.keys())))
+
+        coffee_premise = ""
+        if payload.coffee_path:
+            coffee_file_path = Path(payload.coffee_path)
+            if coffee_file_path.exists():
+                coffee_premise = lesson.load_coffee_premise(coffee_file_path)
+
         transcript = Transcript(book_title=book.title, chapters=[], spans=[])
         interactive_session = InteractiveSession(
             book_title=book.title,
@@ -779,12 +807,16 @@ def create_app(
             embed_fn=embed_fn,
             chat_stream_fn=_pin_chat_model(chat_stream_fn, payload.chat_model),
             mode=mode,
-            checkpoints=payload.checkpoints,
+            checkpoints=checkpoints,
             max_improv_exchanges=(
                 payload.max_improv_exchanges
                 if payload.max_improv_exchanges is not None
                 else DEFAULT_MAX_IMPROV_EXCHANGES
             ),
+            quiz_questions=quiz_questions,
+            quiz_checkpoints=book.quiz_checkpoints,
+            quiz_progress_path=quiz_progress_path,
+            coffee_premise=coffee_premise,
         )
 
         chapter_queue: "queue_module.Queue" = queue_module.Queue()
@@ -814,6 +846,14 @@ def create_app(
         }
 
         return SessionStartResponse(session_id=session_id, book_title=book.title, spoken=True)
+
+    @app.get("/api/session/{session_id}/score", response_model=SessionScoreResponse, dependencies=[Depends(_verify_request)])
+    def session_score(session_id: str) -> SessionScoreResponse:
+        entry = sessions.get(session_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Unknown session id")
+        correct, total = entry["session"].quiz_progress.score
+        return SessionScoreResponse(correct=correct, total=total)
 
     @app.websocket("/api/session/{session_id}/ws")
     async def session_ws(websocket: WebSocket, session_id: str) -> None:
@@ -936,7 +976,11 @@ def create_app(
                             )
                         )
                         if event is not None:
-                            await _send({"type": event.kind, "text": event.text, "sources": event.sources})
+                            payload_out = {"type": event.kind, "text": event.text, "sources": event.sources}
+                            pending = interactive_session.awaiting_quiz_question
+                            if pending is not None:
+                                payload_out["choices"] = pending.options
+                            await _send(payload_out)
 
                     elif msg_type == "chapter_consumed":
                         if renderer is not None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import time
 import wave
 from pathlib import Path
@@ -1066,3 +1067,180 @@ def test_session_ws_live_chapter_consumed_advances_lookahead(tmp_path: Path) -> 
         ws.send_json({"type": "chapter_consumed", "chapter_index": 0})
         second = ws.receive_json()
         assert second["chapter_index"] == 1
+
+
+# --- lesson mode: quiz_path/coffee_path over the live session --------------
+
+
+def _fixture_script_book_with_quiz() -> Book:
+    return Book(
+        title="Fixture Lesson",
+        source_format="script",
+        quiz_checkpoints={"0.0.0": "q1"},
+        chapters=[
+            Chapter(
+                title="One",
+                index=0,
+                paragraphs=[Paragraph(text="NARRATOR: Roles delegate access.", index=0)],
+            )
+        ],
+    )
+
+
+def _write_quiz_file(tmp_path: Path) -> Path:
+    quiz_path = tmp_path / "book.quiz.yaml"
+    quiz_path.write_text(
+        "questions:\n"
+        "  q1:\n"
+        "    prompt: \"What is an IAM role?\"\n"
+        "    options:\n"
+        "      A: \"A user\"\n"
+        "      B: \"A delegated identity\"\n"
+        "    correct: B\n",
+        encoding="utf-8",
+    )
+    return quiz_path
+
+
+def _receive_until(ws, expected_type: str, max_messages: int = 10) -> dict:
+    """Reads messages off `ws` until one of `expected_type` arrives,
+    discarding audio_chunk messages along the way -- spoken sessions
+    (real TTS agent available) interleave those before the final
+    answer/awaiting_input message; see _speak_llm_call in server.py."""
+    for _ in range(max_messages):
+        message = ws.receive_json()
+        if message["type"] == expected_type:
+            return message
+    raise AssertionError(f"Never received a {expected_type!r} message within {max_messages} messages")
+
+
+def test_session_start_live_with_quiz_path_merges_script_quiz_checkpoints(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture Lesson", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
+    quiz_path = _write_quiz_file(tmp_path)
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        yield "What is an IAM role? A) A user B) A delegated identity"
+
+    client = _client(
+        ingest_book=lambda path: _fixture_script_book_with_quiz(),
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=chat_stream_fn,
+        build_render_pipeline_fn=_fake_build_render_pipeline,
+    )
+    start = client.post(
+        "/api/session/start_live",
+        headers=_headers(),
+        json={
+            "book": "unused.script",
+            "cast": str(cast_path),
+            "mode": "learning",
+            "lookahead_chapters": 5,
+            "quiz_path": str(quiz_path),
+        },
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        chapter_ready = ws.receive_json()
+        assert chapter_ready["type"] == "chapter_ready"
+
+        ws.send_json({"type": "position", "span_id": "0.0.0"})
+        awaiting = _receive_until(ws, "awaiting_input")
+        assert awaiting["choices"] == {"A": "A user", "B": "A delegated identity"}
+
+        ws.send_json({"type": "chat", "text": "B"})
+        answer = _receive_until(ws, "answer")
+        assert answer["type"] == "answer"
+
+        # Query while the session (and its WS) is still live -- a session
+        # is scoped to its connection, same as everywhere else in this file.
+        score = client.get(f"/api/session/{session_id}/score", headers=_headers())
+        assert score.status_code == 200
+        assert score.json() == {"correct": 1, "total": 1}
+
+    # quiz_path is "book.quiz.yaml" -- .with_suffix(".progress.json") only
+    # swaps the final ".yaml", giving "book.quiz.progress.json".
+    progress = json.loads((tmp_path / "book.quiz.progress.json").read_text())
+    assert progress["answered"]["q1"]["correct"] is True
+
+
+def test_session_start_live_without_quiz_path_has_no_choices_on_checkpoint(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        yield "What do you think happens next?"
+
+    client = _client(
+        ingest_book=lambda path: _fixture_script_book_with_quiz(),  # has quiz_checkpoints, but no quiz_path given
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=chat_stream_fn,
+        build_render_pipeline_fn=_fake_build_render_pipeline,
+    )
+    start = client.post(
+        "/api/session/start_live",
+        headers=_headers(),
+        json={
+            "book": "unused.script",
+            "cast": str(cast_path),
+            "mode": "learning",
+            "lookahead_chapters": 5,
+            "checkpoints": ["0.0.0"],  # explicit plain checkpoint, no quiz_path this time
+        },
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.receive_json()  # chapter_ready
+
+        ws.send_json({"type": "position", "span_id": "0.0.0"})
+        awaiting = _receive_until(ws, "awaiting_input")
+
+    assert "choices" not in awaiting
+
+
+def test_session_score_returns_404_for_unknown_session() -> None:
+    client = _client()
+    response = client.get("/api/session/does-not-exist/score", headers=_headers())
+    assert response.status_code == 404
+
+
+def test_session_start_live_with_coffee_path_grounds_cyoa(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
+    coffee_path = tmp_path / "book.coffee.md"
+    coffee_path.write_text("A mysterious fog rolls into town.\n", encoding="utf-8")
+
+    seen_prompts = []
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        seen_prompts.append(messages[0]["content"])
+        yield "ok"
+
+    client = _client(
+        ingest_book=lambda path: _fixture_book(),
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=chat_stream_fn,
+        build_render_pipeline_fn=_fake_build_render_pipeline,
+    )
+    start = client.post(
+        "/api/session/start_live",
+        headers=_headers(),
+        json={
+            "book": "unused.epub",
+            "cast": str(cast_path),
+            "mode": "cyoa",
+            "lookahead_chapters": 5,
+            "coffee_path": str(coffee_path),
+        },
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.receive_json()  # chapter_ready
+        ws.send_json({"type": "chat", "text": "I investigate the fog."})
+        answer = _receive_until(ws, "answer")
+
+    assert answer["type"] == "answer"
+    assert "A mysterious fog rolls into town." in seen_prompts[0]
