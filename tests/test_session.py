@@ -241,13 +241,50 @@ def test_learning_checkpoint_with_attached_question_sets_awaiting_quiz_question(
     assert event.kind == "awaiting_input"
 
 
-def test_prefetch_checkpoint_caches_response_without_mutating_session_state() -> None:
+def test_learning_checkpoint_with_question_asks_it_verbatim_without_calling_the_llm() -> None:
     calls = []
     session = _session(
         mode=SessionMode.LEARNING,
         checkpoints=["0.2.0"],
         quiz_checkpoints={"0.2.0": "q1"},
         quiz_questions={"q1": _quiz_question()},
+        chat_calls=calls,
+    )
+
+    event = session.advance_position("0.2.0")
+
+    assert calls == []  # nothing to generate -- the question is already authored
+    assert event.kind == "awaiting_input"
+    assert "What is an IAM role?" in event.text
+    assert "A) A user" in event.text
+    assert "B) A delegated identity" in event.text
+    assert session.awaiting_quiz_question is not None
+    assert session.awaiting_quiz_question.id == "q1"
+
+
+def test_prefetch_checkpoint_is_a_noop_for_a_checkpoint_with_a_question() -> None:
+    # Nothing to prefetch -- asking it doesn't touch the LLM at all.
+    calls = []
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+        chat_calls=calls,
+    )
+
+    session.prefetch_checkpoint("0.2.0")
+
+    assert calls == []
+
+
+def test_prefetch_checkpoint_caches_response_without_mutating_session_state() -> None:
+    # No quiz_checkpoints entry -- a plain CHECKPOINT-mode pause, which
+    # still needs an LLM-authored reaction (nothing pre-written for it).
+    calls = []
+    session = _session(
+        mode=SessionMode.CHECKPOINT,
+        checkpoints=["0.2.0"],
         chat_calls=calls,
     )
 
@@ -263,10 +300,8 @@ def test_prefetch_checkpoint_caches_response_without_mutating_session_state() ->
 def test_advance_position_uses_prefetched_response_without_calling_the_llm_again() -> None:
     calls = []
     session = _session(
-        mode=SessionMode.LEARNING,
+        mode=SessionMode.CHECKPOINT,
         checkpoints=["0.2.0"],
-        quiz_checkpoints={"0.2.0": "q1"},
-        quiz_questions={"q1": _quiz_question()},
         chat_calls=calls,
     )
     session.prefetch_checkpoint("0.2.0")
@@ -277,17 +312,14 @@ def test_advance_position_uses_prefetched_response_without_calling_the_llm_again
     assert len(calls) == 1  # advance_position did not call the LLM again
     assert event.kind == "awaiting_input"
     assert event.text == "canned response"
-    assert session.awaiting_quiz_question is not None
-    assert session.awaiting_quiz_question.id == "q1"
+    assert session.awaiting_quiz_question is None
 
 
 def test_advance_position_falls_back_to_a_live_call_when_not_prefetched() -> None:
     calls = []
     session = _session(
-        mode=SessionMode.LEARNING,
+        mode=SessionMode.CHECKPOINT,
         checkpoints=["0.2.0"],
-        quiz_checkpoints={"0.2.0": "q1"},
-        quiz_questions={"q1": _quiz_question()},
         chat_calls=calls,
     )
 
@@ -300,10 +332,8 @@ def test_advance_position_falls_back_to_a_live_call_when_not_prefetched() -> Non
 def test_prefetch_checkpoint_is_a_noop_for_a_non_checkpoint_span() -> None:
     calls = []
     session = _session(
-        mode=SessionMode.LEARNING,
+        mode=SessionMode.CHECKPOINT,
         checkpoints=["0.2.0"],
-        quiz_checkpoints={"0.2.0": "q1"},
-        quiz_questions={"q1": _quiz_question()},
         chat_calls=calls,
     )
 
@@ -315,10 +345,8 @@ def test_prefetch_checkpoint_is_a_noop_for_a_non_checkpoint_span() -> None:
 def test_prefetch_checkpoint_is_a_noop_when_already_cached() -> None:
     calls = []
     session = _session(
-        mode=SessionMode.LEARNING,
+        mode=SessionMode.CHECKPOINT,
         checkpoints=["0.2.0"],
-        quiz_checkpoints={"0.2.0": "q1"},
-        quiz_questions={"q1": _quiz_question()},
         chat_calls=calls,
     )
 
@@ -326,24 +354,6 @@ def test_prefetch_checkpoint_is_a_noop_when_already_cached() -> None:
     session.prefetch_checkpoint("0.2.0")
 
     assert len(calls) == 1
-
-
-def test_learning_checkpoint_prompt_includes_exact_question_and_options() -> None:
-    calls = []
-    session = _session(
-        mode=SessionMode.LEARNING,
-        checkpoints=["0.2.0"],
-        quiz_checkpoints={"0.2.0": "q1"},
-        quiz_questions={"q1": _quiz_question()},
-        chat_calls=calls,
-    )
-
-    session.advance_position("0.2.0")
-
-    prompt_sent = calls[0][-1]["content"]
-    assert "What is an IAM role?" in prompt_sent
-    assert "A) A user" in prompt_sent
-    assert "B) A delegated identity" in prompt_sent
 
 
 def test_checkpoint_without_attached_question_behaves_as_before() -> None:

@@ -112,10 +112,12 @@ class InteractiveSession:
         self.history: list[ChatTurn] = []
         self.improv_exchange_count = 0
         self._praise_rotation_index = 0
-        # span_id -> (prompt_text, QuizQuestion|None), populated by
-        # prefetch_checkpoint ahead of playback actually reaching a
-        # checkpoint, so advance_position can skip the LLM round-trip.
-        self._checkpoint_prompt_cache: dict[str, tuple[str, Optional[QuizQuestion]]] = {}
+        # span_id -> prompt_text, populated by prefetch_checkpoint ahead of
+        # playback actually reaching a (non-quiz-question) checkpoint, so
+        # advance_position can skip the LLM round-trip. A checkpoint with
+        # an attached QuizQuestion is never cached here -- it's asked
+        # verbatim, no LLM involved at all.
+        self._checkpoint_prompt_cache: dict[str, str] = {}
 
     @property
     def current_seq(self) -> int:
@@ -162,37 +164,36 @@ class InteractiveSession:
         bound = self.current_seq if max_seq is None else max_seq
         return search_rag(self.rag_index, query_vector, max_seq=bound, top_k=self.top_k)
 
-    def _checkpoint_prompt_messages(self, span_id: str) -> tuple[list[dict], Optional[QuizQuestion]]:
-        """Builds the "ask about this checkpoint in character" messages for
-        `span_id` -- shared by `advance_position` (live) and
+    def _checkpoint_question(self, span_id: str) -> Optional[QuizQuestion]:
+        question_id = self.quiz_checkpoints.get(span_id) if self.mode is SessionMode.LEARNING else None
+        return self.quiz_questions.get(question_id) if question_id else None
+
+    def _checkpoint_prompt_messages(self, span_id: str) -> list[dict]:
+        """Builds the "react to reaching this checkpoint in character"
+        messages for `span_id` -- shared by `advance_position` (live) and
         `prefetch_checkpoint` (ahead of time). Grounded in `span_id`'s own
         position (not necessarily `self.current_span_id`, which is stale
         during a prefetch), so RAG retrieval and position context are
         correct either way.
 
-        Returns the `QuizQuestion` too, if this checkpoint has one, so the
-        caller decides when to actually set `awaiting_quiz_question` --
-        never during a prefetch, only once the checkpoint is really
-        reached."""
+        Only ever called for a checkpoint with no attached QuizQuestion --
+        one *with* a question is asked verbatim, no LLM involved at all
+        (see `_quiz_question_text`); this is for a plain CHECKPOINT-mode
+        pause, or a LEARNING-mode checkpoint that isn't actually a quiz
+        question, where there's nothing pre-authored to say and the LLM
+        has to generate a reaction."""
         seq = self._seq_by_span_id.get(span_id, self.current_seq)
-        question_id = self.quiz_checkpoints.get(span_id) if self.mode is SessionMode.LEARNING else None
-        question = self.quiz_questions.get(question_id) if question_id else None
-        pause_message = (
-            self._format_quiz_prompt(question) if question is not None else "(narration has reached a pause point)"
-        )
-
         hits = self._retrieve("what has just happened in the story", max_seq=seq)
-        messages = build_messages(
+        return build_messages(
             mode=self.mode,
             book_title=self.book_title,
             character_voice=self.character_voice,
             position_summary=self._position_summary(seq),
             rag_excerpts=[hit.entry.text for hit in hits],
             history=self.history[-self.history_limit :],
-            user_message=pause_message,
+            user_message="(narration has reached a pause point)",
             current_paragraph=self._current_paragraph_text(seq),
         )
-        return messages, question
 
     def prefetch_checkpoint(self, span_id: str) -> None:
         """Precomputes and caches the checkpoint response for `span_id` --
@@ -208,15 +209,18 @@ class InteractiveSession:
         a distinct cache key) -- reads session state but mutates only the
         cache, never `awaiting_quiz_question`/history/state, which must
         only change once the checkpoint is actually reached. A no-op if
-        `span_id` isn't a checkpoint in the current mode, or is already
-        cached."""
+        `span_id` isn't a checkpoint in the current mode, is already
+        cached, or (see `_checkpoint_prompt_messages`) has an attached
+        QuizQuestion -- nothing to prefetch there, it's asked verbatim."""
         if span_id in self._checkpoint_prompt_cache or span_id not in self.checkpoints:
             return
         if self.mode not in (SessionMode.CHECKPOINT, SessionMode.LEARNING):
             return
-        messages, question = self._checkpoint_prompt_messages(span_id)
+        if self._checkpoint_question(span_id) is not None:
+            return
+        messages = self._checkpoint_prompt_messages(span_id)
         prompt_text = "".join(self._chat_stream_fn(messages))
-        self._checkpoint_prompt_cache[span_id] = (prompt_text, question)
+        self._checkpoint_prompt_cache[span_id] = prompt_text
 
     def advance_position(
         self, span_id: str, *, on_delta: Optional[Callable[[str], None]] = None
@@ -233,40 +237,46 @@ class InteractiveSession:
 
         self.state = SessionState.PAUSED_FOR_USER
 
-        cached = self._checkpoint_prompt_cache.pop(span_id, None)
-        if cached is not None:
-            prompt_text, question = cached
-            if question is not None:
-                self.awaiting_quiz_question = question
+        question = self._checkpoint_question(span_id)
+        if question is not None:
+            # Asked verbatim -- the question is already exactly authored
+            # (quiz.yaml), so there's nothing for the LLM to generate here.
+            # It only gets involved afterward: _incorrect_note (a wrong
+            # answer) or the normal chat flow (free text instead of a
+            # letter) -- see handle_user_message.
+            self.awaiting_quiz_question = question
+            prompt_text = self._quiz_question_text(question)
             if on_delta is not None:
-                # The whole (already-generated) text in one call -- still
-                # gets synthesized sentence-by-sentence downstream (see
-                # server.py's SentenceChunker), just without the LLM
-                # token-streaming step this skips.
                 on_delta(prompt_text)
         else:
-            messages, question = self._checkpoint_prompt_messages(span_id)
-            if question is not None:
-                self.awaiting_quiz_question = question
-            chunks: list[str] = []
-            for delta in self._chat_stream_fn(messages):
+            cached = self._checkpoint_prompt_cache.pop(span_id, None)
+            if cached is not None:
+                prompt_text = cached
                 if on_delta is not None:
-                    on_delta(delta)
-                chunks.append(delta)
-            prompt_text = "".join(chunks)
+                    # The whole (already-generated) text in one call --
+                    # still gets synthesized sentence-by-sentence
+                    # downstream (see server.py's SentenceChunker), just
+                    # without the LLM token-streaming step this skips.
+                    on_delta(prompt_text)
+            else:
+                messages = self._checkpoint_prompt_messages(span_id)
+                chunks: list[str] = []
+                for delta in self._chat_stream_fn(messages):
+                    if on_delta is not None:
+                        on_delta(delta)
+                    chunks.append(delta)
+                prompt_text = "".join(chunks)
 
         self.history.append(ChatTurn(role="assistant", content=prompt_text))
         self.history = self.history[-self.history_limit :]
         return SessionEvent(kind="awaiting_input", text=prompt_text)
 
     @staticmethod
-    def _format_quiz_prompt(question: QuizQuestion) -> str:
+    def _quiz_question_text(question: QuizQuestion) -> str:
+        """The question exactly as authored in quiz.yaml -- spoken/shown
+        verbatim, never paraphrased by an LLM."""
         options_block = "\n".join(f"{key}) {text}" for key, text in question.options.items())
-        return (
-            "(quiz checkpoint) Ask the listener this exact question in character, "
-            "then wait for their A/B/C/D answer -- do not paraphrase or invent a "
-            f"different question:\n{question.prompt}\n{options_block}"
-        )
+        return f"{question.prompt}\n{options_block}"
 
     def _grade_quiz_answer(self, choice: str) -> tuple[bool, QuizQuestion]:
         """Grades `choice` against the pending question, deterministically

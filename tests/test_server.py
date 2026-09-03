@@ -1399,7 +1399,9 @@ def test_session_start_live_with_quiz_path_merges_script_quiz_checkpoints(tmp_pa
     assert progress["answered"]["q1"]["correct"] is True
 
 
-def test_session_ws_live_prefetches_checkpoint_response_before_position_reaches_it(tmp_path: Path) -> None:
+def test_session_ws_live_quiz_checkpoint_asks_the_question_with_no_llm_call(tmp_path: Path) -> None:
+    # A checkpoint with an attached quiz question is asked verbatim --
+    # no prefetch needed, no LLM round-trip at all, live or otherwise.
     cast_path = tmp_path / "book.cast.yaml"
     save_cast(CastFile(book_title="Fixture Lesson", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
     quiz_path = _write_quiz_file(tmp_path)
@@ -1408,7 +1410,7 @@ def test_session_ws_live_prefetches_checkpoint_response_before_position_reaches_
 
     def chat_stream_fn(messages, *, model="hermes3:8b"):
         calls.append(messages)
-        yield "What is an IAM role? A) A user B) A delegated identity"
+        yield "unused"
 
     client = _client(
         ingest_book=lambda path: _fixture_script_book_with_quiz(),
@@ -1430,27 +1432,19 @@ def test_session_ws_live_prefetches_checkpoint_response_before_position_reaches_
     session_id = start.json()["session_id"]
 
     with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
-        _receive_skipping_progress(ws)  # chapter_ready -- kicks off the checkpoint prefetch
-
-        # The prefetch runs on a background thread; give it a moment to
-        # land before ever sending a "position" message.
-        deadline = time.time() + 2
-        while len(calls) < 1 and time.time() < deadline:
-            time.sleep(0.02)
-        assert len(calls) == 1  # prefetched already, with no position message sent yet
+        _receive_skipping_progress(ws)  # chapter_ready
 
         ws.send_json({"type": "position", "span_id": "0.0.0"})
         awaiting = _receive_until(ws, "awaiting_input")
 
     assert awaiting["choices"] == {"A": "A user", "B": "A delegated identity"}
-    assert len(calls) == 1  # advance_position reused the cached response, no second LLM call
+    assert calls == []  # never touched the LLM to ask it
 
 
-def _fixture_script_book_two_chapters_with_quiz() -> Book:
+def _fixture_script_book_two_chapters() -> Book:
     return Book(
         title="Fixture Lesson",
         source_format="script",
-        quiz_checkpoints={"0.0.0": "q1", "1.0.0": "q2"},
         chapters=[
             Chapter(title="One", index=0, paragraphs=[Paragraph(text="NARRATOR: Roles delegate access.", index=0)]),
             Chapter(title="Two", index=1, paragraphs=[Paragraph(text="NARRATOR: Policies grant permissions.", index=0)]),
@@ -1458,40 +1452,21 @@ def _fixture_script_book_two_chapters_with_quiz() -> Book:
     )
 
 
-def _write_two_question_quiz_file(tmp_path: Path) -> Path:
-    quiz_path = tmp_path / "book.quiz.yaml"
-    quiz_path.write_text(
-        "questions:\n"
-        "  q1:\n"
-        "    prompt: \"What is an IAM role?\"\n"
-        "    options:\n"
-        "      A: \"A user\"\n"
-        "      B: \"A delegated identity\"\n"
-        "    correct: B\n"
-        "  q2:\n"
-        "    prompt: \"What does a policy do?\"\n"
-        "    options:\n"
-        "      A: \"Grants permissions\"\n"
-        "      B: \"Deletes users\"\n"
-        "    correct: A\n",
-        encoding="utf-8",
-    )
-    return quiz_path
-
-
 def test_session_ws_live_looks_ahead_one_chapter_to_prefetch_its_checkpoint_too(tmp_path: Path) -> None:
+    # Plain (non-quiz) CHECKPOINT-mode pauses, since a quiz question's
+    # response is never prefetched (see prefetch_checkpoint) -- this is
+    # about the look-ahead mechanism itself, not quiz-specific behavior.
     cast_path = tmp_path / "book.cast.yaml"
     save_cast(CastFile(book_title="Fixture Lesson", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
-    quiz_path = _write_two_question_quiz_file(tmp_path)
 
     calls = []
 
     def chat_stream_fn(messages, *, model="hermes3:8b"):
         calls.append(messages)
-        yield "a question"
+        yield "a reaction"
 
     client = _client(
-        ingest_book=lambda path: _fixture_script_book_two_chapters_with_quiz(),
+        ingest_book=lambda path: _fixture_script_book_two_chapters(),
         embed_fn=_fake_embed_fn,
         chat_stream_fn=chat_stream_fn,
         build_render_pipeline_fn=_fake_build_render_pipeline,
@@ -1502,9 +1477,9 @@ def test_session_ws_live_looks_ahead_one_chapter_to_prefetch_its_checkpoint_too(
         json={
             "book": "unused.script",
             "cast": str(cast_path),
-            "mode": "learning",
+            "mode": "checkpoint",
+            "checkpoints": ["0.0.0", "1.0.0"],
             "lookahead_chapters": 5,  # both chapters render well ahead of any playback/consumption
-            "quiz_path": str(quiz_path),
         },
     )
     session_id = start.json()["session_id"]
