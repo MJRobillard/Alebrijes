@@ -71,6 +71,7 @@ def build_system_prompt(
     mode: Mode,
     guidelines: str | None = None,
     mode_fragments: dict[Mode, str] | None = None,
+    current_paragraph: str = "",
 ) -> str:
     guidelines = guidelines if guidelines is not None else load_guidelines()
     mode_fragments = mode_fragments if mode_fragments is not None else load_mode_fragments()
@@ -81,12 +82,19 @@ def build_system_prompt(
         else "(no relevant excerpts retrieved)"
     )
 
+    # Marked distinctly (not folded into position_summary, which is a short
+    # truncated pointer) so a caller with its own RAG over the same book
+    # (e.g. llm/scripter.py's ScripterClient) can pull the full paragraph
+    # back out of this prompt without needing a separate call parameter.
+    paragraph_block = f"Current paragraph (full text):\n{current_paragraph}\n\n" if current_paragraph else ""
+
     return (
         f"{guidelines}\n\n"
         "---\n\n"
         f"Book: {book_title}\n"
         f"You are speaking as: {character_voice}\n"
         f"Listener's current position: {position_summary}\n\n"
+        f"{paragraph_block}"
         f"Retrieved excerpts (bounded to the listener's current position):\n{excerpts_block}\n\n"
         f"{mode_fragments[mode]}"
     )
@@ -102,6 +110,7 @@ def build_messages(
     history: Sequence[ChatTurn],
     user_message: str,
     guidelines: str | None = None,
+    current_paragraph: str = "",
 ) -> list[dict]:
     system_prompt = build_system_prompt(
         book_title=book_title,
@@ -110,6 +119,7 @@ def build_messages(
         rag_excerpts=rag_excerpts,
         mode=mode,
         guidelines=guidelines,
+        current_paragraph=current_paragraph,
     )
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend({"role": turn.role, "content": turn.content} for turn in history)

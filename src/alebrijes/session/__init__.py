@@ -119,6 +119,16 @@ class InteractiveSession:
         span = self.transcript.spans[self.current_seq]
         return f"chapter {span.chapter_index + 1}, near: “{span.text[:80]}”"
 
+    def _current_paragraph_text(self) -> str:
+        """Full (untruncated) text of the span at the listener's current
+        position -- unlike `_position_summary`'s 80-char pointer, this is
+        meant for a chat backend with its own RAG over the same book (e.g.
+        `llm.scripter.ScripterClient`) to ground retrieval/replies in
+        exactly where the listener is, not just the raw question."""
+        if self.current_span_id is None or not self.transcript.spans:
+            return ""
+        return self.transcript.spans[self.current_seq].text
+
     def extend_transcript(self, new_spans: list) -> None:
         """Appends newly-available spans (e.g. a chapter a live
         `session.buffer.LookaheadRenderer` just finished) to the transcript
@@ -168,6 +178,7 @@ class InteractiveSession:
             rag_excerpts=[hit.entry.text for hit in hits],
             history=self.history[-self.history_limit :],
             user_message=pause_message,
+            current_paragraph=self._current_paragraph_text(),
         )
         chunks: list[str] = []
         for delta in self._chat_stream_fn(messages):
@@ -263,6 +274,7 @@ class InteractiveSession:
             rag_excerpts=rag_excerpts,
             history=self.history[-self.history_limit :],
             user_message=effective_message,
+            current_paragraph=self._current_paragraph_text(),
         )
         chunks: list[str] = []
         for delta in self._chat_stream_fn(messages):

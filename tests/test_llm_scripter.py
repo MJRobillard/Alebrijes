@@ -34,6 +34,50 @@ def test_chat_stream_sends_latest_user_message_and_yields_reply() -> None:
     assert seen_payload["session_id"]  # non-empty, stable per client
 
 
+def test_chat_stream_extracts_current_paragraph_from_system_message_as_context() -> None:
+    seen_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payload.update(json.loads(request.content))
+        return httpx.Response(200, json={"reply": "ok"})
+
+    client = ScripterClient(client=_client_with_transport(handler))
+    system_content = (
+        "some guidelines\n\n---\n\nBook: Fixture\nYou are speaking as: Narrator\n"
+        "Listener's current position: chapter 1, near: “...”\n\n"
+        "Current paragraph (full text):\nColin walked into the garden and paused.\n\n"
+        "Retrieved excerpts (bounded to the listener's current position):\n(no relevant excerpts retrieved)\n\n"
+        "mode fragment"
+    )
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": "who is in the garden?"},
+    ]
+
+    list(client.chat_stream(messages))
+
+    assert seen_payload["context"] == "Colin walked into the garden and paused."
+    assert seen_payload["message"] == "who is in the garden?"
+
+
+def test_chat_stream_sends_null_context_when_system_message_has_no_paragraph_marker() -> None:
+    seen_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payload.update(json.loads(request.content))
+        return httpx.Response(200, json={"reply": "ok"})
+
+    client = ScripterClient(client=_client_with_transport(handler))
+    messages = [
+        {"role": "system", "content": "no marker here"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    list(client.chat_stream(messages))
+
+    assert seen_payload["context"] is None
+
+
 def test_chat_stream_reuses_the_same_session_id_across_calls() -> None:
     seen_session_ids = []
 
