@@ -1,11 +1,46 @@
 from __future__ import annotations
 
-from alebrijes.llm.prompts import ChatTurn, Mode, build_messages, build_system_prompt, load_guidelines
+import pytest
+
+from alebrijes.llm.prompts import (
+    ChatTurn,
+    Mode,
+    build_messages,
+    build_system_prompt,
+    load_guidelines,
+    load_mode_fragments,
+)
 
 
 def test_load_guidelines_contains_no_spoiler_rule() -> None:
     text = load_guidelines()
     assert "spoiler" in text.lower()
+
+
+def test_load_guidelines_strips_the_yaml_frontmatter_block() -> None:
+    text = load_guidelines()
+    assert not text.startswith("---")
+    assert "modes:" not in text
+
+
+def test_load_mode_fragments_has_all_four_modes_with_nonempty_text() -> None:
+    fragments = load_mode_fragments()
+    assert set(fragments.keys()) == {Mode.QA, Mode.CYOA, Mode.CHECKPOINT, Mode.LEARNING}
+    for text in fragments.values():
+        assert text.strip()
+
+
+def test_load_mode_fragments_reads_from_a_temp_file(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    custom = tmp_path / "guidelines.md"
+    custom.write_text(
+        "---\nmodes:\n  qa: >\n    Custom QA fragment.\n  cyoa: >\n    Custom CYOA.\n"
+        "  checkpoint: >\n    Custom checkpoint.\n  learning: >\n    Custom learning.\n---\n\nBody text.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("alebrijes.llm.prompts._GUIDELINES_PATH", custom)
+
+    assert load_guidelines() == "Body text."
+    assert load_mode_fragments()[Mode.QA] == "Custom QA fragment."
 
 
 def test_build_system_prompt_includes_guidelines_book_and_position() -> None:

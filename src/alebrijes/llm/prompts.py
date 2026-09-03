@@ -2,19 +2,27 @@
 
 One common system-prompt base (book/position context + the narrator
 guidelines + position-bounded RAG excerpts) plus a small composable
-mode-specific fragment — not four independent prompt templates. See
-`narrator_guidelines.md` for the shared spoiler-safety/grounding rules this
-always includes.
+mode-specific fragment — not four independent prompt templates. Both live
+in `narrator_guidelines.md`: a YAML frontmatter block holds the four
+short per-mode fragments (structured, since there's one per `Mode`), and
+the Markdown body below it holds the long-form shared guidelines (plain
+prose reads better as Markdown than as a YAML block scalar). Editing
+either doesn't need a code change or restart — the file's read fresh each
+time a prompt is built.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Sequence
 
+import yaml
+
 _GUIDELINES_PATH = Path(__file__).parent / "narrator_guidelines.md"
+_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n?", re.DOTALL)
 
 
 class Mode(str, Enum):
@@ -24,39 +32,34 @@ class Mode(str, Enum):
     LEARNING = "learning"
 
 
-_MODE_FRAGMENTS: dict[Mode, str] = {
-    Mode.QA: (
-        "The listener has interrupted playback to ask a question. Answer it "
-        "directly and briefly, then let them return to listening — you are "
-        "not continuing the story here, just answering."
-    ),
-    Mode.CYOA: (
-        "The listener is improvising a choice or action. Continue the scene "
-        "in the book's voice, incorporating their input, and stay tonally "
-        "consistent with the book. If a steer-back beat is provided below, "
-        "work it in as a natural in-story turn rather than an abrupt jump."
-    ),
-    Mode.CHECKPOINT: (
-        "You have reached a natural pause point. Ask the listener what they "
-        "think should happen next, or what choice the story's protagonist "
-        "should make, as an in-story beat."
-    ),
-    Mode.LEARNING: (
-        "Ask the listener a comprehension question about what's happened so "
-        "far, or, if they've just answered one, react to their specific "
-        "answer in character before continuing."
-    ),
-}
-
-
 @dataclass
 class ChatTurn:
     role: str  # "user" | "assistant"
     content: str
 
 
+def _read_guidelines_file() -> tuple[str, dict]:
+    """Splits `narrator_guidelines.md` into (markdown body, frontmatter
+    dict). A missing/malformed frontmatter block is treated as "no
+    frontmatter" (empty dict) rather than an error, so the file still works
+    as pure prose if someone strips it."""
+    raw = _GUIDELINES_PATH.read_text(encoding="utf-8")
+    match = _FRONTMATTER_RE.match(raw)
+    if not match:
+        return raw, {}
+    frontmatter = yaml.safe_load(match.group(1)) or {}
+    return raw[match.end() :], frontmatter
+
+
 def load_guidelines() -> str:
-    return _GUIDELINES_PATH.read_text(encoding="utf-8")
+    body, _ = _read_guidelines_file()
+    return body.strip()
+
+
+def load_mode_fragments() -> dict[Mode, str]:
+    _, frontmatter = _read_guidelines_file()
+    modes = frontmatter.get("modes", {})
+    return {Mode(key): value.strip() for key, value in modes.items()}
 
 
 def build_system_prompt(
@@ -67,8 +70,10 @@ def build_system_prompt(
     rag_excerpts: Sequence[str],
     mode: Mode,
     guidelines: str | None = None,
+    mode_fragments: dict[Mode, str] | None = None,
 ) -> str:
     guidelines = guidelines if guidelines is not None else load_guidelines()
+    mode_fragments = mode_fragments if mode_fragments is not None else load_mode_fragments()
 
     excerpts_block = (
         "\n".join(f"- {excerpt}" for excerpt in rag_excerpts)
@@ -83,7 +88,7 @@ def build_system_prompt(
         f"You are speaking as: {character_voice}\n"
         f"Listener's current position: {position_summary}\n\n"
         f"Retrieved excerpts (bounded to the listener's current position):\n{excerpts_block}\n\n"
-        f"{_MODE_FRAGMENTS[mode]}"
+        f"{mode_fragments[mode]}"
     )
 
 

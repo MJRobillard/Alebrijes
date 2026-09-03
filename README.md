@@ -124,17 +124,45 @@ export ALEBRIJES_EMBED_MODEL=nomic-embed-text
 ```
 
 **Prompting instructions live in `src/alebrijes/llm/narrator_guidelines.md`**
-— a plain Markdown file, not buried in Python, specifically so it can be
-read and edited without touching code. Every mode's system prompt includes
-it verbatim (see `llm/prompts.py`). It has six sections; what each one
-governs, and when to edit it:
+— not buried in Python, specifically so it can be read and edited without
+touching code. It's Markdown with a YAML frontmatter block: the frontmatter
+holds the four short per-mode fragments (structured, since there's exactly
+one per interaction mode), and the Markdown body below it holds the
+long-form guidelines shared by every mode (plain prose, since that reads
+easier than a YAML block scalar). `llm/prompts.py` reads both fresh on
+every prompt build.
+
+**Frontmatter — one fragment per mode**, appended after the shared
+guidelines and RAG excerpts to steer that specific interaction:
+
+```yaml
+---
+modes:
+  qa: >
+    ...
+  cyoa: >
+    ...
+  checkpoint: >
+    ...
+  learning: >
+    ...
+---
+```
+Edit `qa` if free-form questions aren't getting answered the way you want,
+`cyoa` if improvised branches drift off-tone or don't steer back to the
+book cleanly, `checkpoint` if pause-for-a-choice prompts don't read as a
+natural in-story beat, or `learning` if comprehension questions or the
+reaction to a listener's answer feel off.
+
+**Markdown body — six shared sections**, included in every mode's prompt
+regardless of which fragment above also applies:
 
 | Section | Governs | Edit it if... |
 |---|---|---|
 | **No spoilers** | Refusing to reveal/imply anything past the listener's current position | Answers still leak future plot, or over-refuse things that already happened |
 | **Ground answers in the retrieved excerpts** | Only using the RAG passages actually retrieved, not invented lore | The model is hallucinating details not in the book |
 | **Checkpoints and comprehension questions** | How pause-for-choice and quiz-style prompts are phrased, and how answers get reacted to | Checkpoint/Learning mode feels like a quiz show instead of an in-story beat |
-| **Improvised (CYOA) branches** | Tone consistency during improvisation, and how it steers back to canon | CYOA drifts off-tone, or the return-to-plot feels abrupt |
+| **Improvised (choose-your-own-adventure) branches** | Tone consistency during improvisation, and how it steers back to canon | CYOA drifts off-tone, or the return-to-plot feels abrupt |
 | **Stay in voice** | Never breaking character as "an AI" | The narrator ever refers to itself as an assistant/model |
 | **Lead with a short sentence** | The first sentence being brief, so sentence-chunked audio (see below) starts playing almost immediately | Responses still open with a long sentence before saying anything |
 
