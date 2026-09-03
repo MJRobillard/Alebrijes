@@ -235,7 +235,9 @@
 
   const listenLink = document.getElementById("listen-link");
   listenLink.href = "/listen?token=" + encodeURIComponent(token);
-  listenLink.target = "_blank"; // open alongside this page, not instead of it -- both stay usable
+  // No target="_blank": inside the pywebview window this should navigate
+  // in place, like a page in a normal app, not spawn a second window --
+  // listen.html links back to "/" the same way (see its own script).
 
   async function apiFetch(path, options) {
     options = options || {};

@@ -43,6 +43,8 @@
   }
   h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
   .subtitle { color: var(--ink-soft); margin: 0 0 2rem; font-size: 0.9rem; }
+  .subtitle a { color: var(--accent); font-weight: 600; text-decoration: none; margin-left: 0.5rem; }
+  .subtitle a:hover { text-decoration: underline; }
   section {
     background: var(--panel);
     border: 1px solid var(--line);
@@ -134,7 +136,10 @@
 <body>
 <main>
   <h1>Listen</h1>
-  <p class="subtitle">Play a rendered audiobook with a live, scrollable transcript.</p>
+  <p class="subtitle">
+    Play a rendered audiobook with a live, scrollable transcript.
+    <a id="back-link" href="#">&larr; Back to pipeline</a>
+  </p>
 
   <div id="warning-banner" hidden></div>
 
@@ -203,6 +208,8 @@
 (function () {
   const token = new URLSearchParams(window.location.search).get("token");
   const state = { audioPath: null, castPath: null, transcript: null, currentSpanId: null, session: null };
+
+  document.getElementById("back-link").href = "/?token=" + encodeURIComponent(token);
 
   async function apiFetch(path, options) {
     options = options || {};
