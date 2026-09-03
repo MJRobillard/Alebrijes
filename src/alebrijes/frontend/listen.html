@@ -237,6 +237,7 @@
     <audio id="lesson-player" controls hidden style="margin-top: 0.5rem;"></audio>
     <div id="lesson-transcript"></div>
     <div id="lesson-chat-log" style="margin-top: 0.75rem; max-height: 30vh; overflow-y: auto;" hidden></div>
+    <div id="lesson-thinking" class="status" hidden style="margin-top: 0.4rem; font-style: italic;">Thinking…</div>
     <div id="lesson-quiz-panel" hidden style="margin-top: 0.75rem; border: 1px solid var(--line); border-radius: 6px; padding: 0.75rem;">
       <div id="lesson-quiz-prompt" style="font-weight: 600; margin-bottom: 0.6rem;"></div>
       <div class="row" id="lesson-quiz-choices-row" style="margin-bottom: 0.6rem;"></div>
@@ -790,6 +791,7 @@
   const lessonPlayer = document.getElementById("lesson-player");
   const lessonTranscriptEl = document.getElementById("lesson-transcript");
   const lessonChatLog = document.getElementById("lesson-chat-log");
+  const lessonThinkingEl = document.getElementById("lesson-thinking");
   const lessonQuizPanel = document.getElementById("lesson-quiz-panel");
   const lessonQuizPromptEl = document.getElementById("lesson-quiz-prompt");
   const lessonQuizChoicesRow = document.getElementById("lesson-quiz-choices-row");
@@ -898,6 +900,7 @@
       lessonBookTitleEl.textContent = result.book_title || "";
       lessonTranscriptEl.innerHTML = "";
       lessonChatLog.innerHTML = "";
+      lessonThinkingEl.hidden = true;
       lessonChatLog.hidden = false;
       lessonChatRow.hidden = false;
       lessonPlayer.hidden = false;
@@ -933,6 +936,7 @@
           "Rendering chapter " + (message.chapter_index + 1) + "… line " +
           message.lines_done + " / " + message.lines_total;
       } else if (message.type === "awaiting_input") {
+        lessonThinkingEl.hidden = true;
         lessonPlayer.pause();
         appendChatTurnTo(lessonChatLog, "narrator", message.text);
         if (message.choices) {
@@ -944,6 +948,7 @@
           lessonChatInput.focus();
         }
       } else if (message.type === "answer") {
+        lessonThinkingEl.hidden = true;
         appendChatTurnTo(lessonChatLog, "narrator", message.text);
         hideLessonQuizPanel();
         lessonChatInput.disabled = false;
@@ -955,9 +960,16 @@
         // a no-op then.
         if (lessonPlayer.paused) lessonPlayer.play();
       } else if (message.type === "audio_chunk") {
+        // The first chunk of a live LLM response is the earliest signal
+        // that the wait is over and something is actually coming back --
+        // hide "Thinking…" here, not just on the final answer/awaiting_input,
+        // so it disappears the moment audio starts rather than sitting
+        // there through the whole (possibly multi-sentence) response.
+        lessonThinkingEl.hidden = true;
         if (message.text) appendChatTurnTo(lessonChatLog, "live", message.character + ": " + message.text);
         lessonResponsePlayer.push(message.data);
       } else if (message.type === "error") {
+        lessonThinkingEl.hidden = true;
         appendChatTurnTo(lessonChatLog, "narrator", "Error: " + message.detail);
         hideLessonQuizPanel();
         lessonChatInput.disabled = false;
@@ -1107,6 +1119,13 @@
     lessonQuizTextInput.disabled = true;
     lessonQuizTextSendBtn.disabled = true;
     lessonQuizChoicesRow.querySelectorAll("button, input").forEach(function (el) { el.disabled = true; });
+    // A correct quiz answer is graded and spoken instantly (no LLM call --
+    // see session/__init__.py's advance_position); a wrong answer or any
+    // free text does go through the LLM, which can take a few seconds
+    // (more if it's a heavier local model). Without this, that wait looks
+    // identical to the page being stuck -- everything's disabled and
+    // nothing visibly happens until the first bit of audio streams back.
+    lessonThinkingEl.hidden = false;
     lessonState.ws.send(JSON.stringify({ type: "chat", text: text }));
   }
 })();
