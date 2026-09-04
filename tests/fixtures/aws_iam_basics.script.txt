@@ -1,0 +1,13 @@
+# IAM Users and Roles
+NARRATOR: AWS Identity and Access Management, or IAM, is the AWS service that controls who can do what in an AWS account. It is global, not tied to a single region, and it is the first thing most engineers configure in a new account.
+NARRATOR: An IAM user represents a single person or application. Each user can have long-term credentials: a password for the console, and access keys for the CLI or SDKs. Best practice is to avoid creating long-lived access keys for humans at all, and to require multi-factor authentication for console access.
+NARRATOR: An IAM role is different from a user: it has no long-term credentials of its own. Instead, something -- a person, an application, or another AWS service -- assumes the role and receives temporary credentials that expire. Roles are the standard way to grant an EC2 instance or a Lambda function permission to call other AWS services, instead of embedding access keys in code.
+QUIZ: iam_user_vs_role
+# Policies and Permissions
+NARRATOR: Permissions in IAM are granted through policies, which are JSON documents attached to a user, group, or role. A policy statement has an Effect, Allow or Deny, an Action naming which API calls it covers, and a Resource naming which specific things it applies to.
+NARRATOR: By default, an IAM principal has no permissions at all -- everything must be explicitly granted. And an explicit Deny always overrides an Allow, no matter where else in the account an Allow might otherwise apply.
+QUIZ: deny_overrides_allow
+# The Root User
+NARRATOR: The root user is the identity created when the AWS account itself is created. It has unrestricted access, and that access cannot be limited by any policy.
+NARRATOR: Because of that, AWS's own guidance is to lock the root user away: enable MFA on it, avoid using it for daily work, and create IAM users or roles with only the permissions actually needed for each job -- the principle of least privilege.
+QUIZ: root_user_limits

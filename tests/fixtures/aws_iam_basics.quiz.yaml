@@ -1,0 +1,28 @@
+questions:
+  iam_user_vs_role:
+    prompt: "What's the key difference between an IAM user and an IAM role?"
+    options:
+      A: "Roles are global and users are region-scoped"
+      B: "A role has no long-term credentials; something assumes it and gets temporary credentials"
+      C: "Users can only be used by AWS services, not people"
+      D: "There is no difference, they're interchangeable terms"
+    correct: B
+    praise: "Right -- a role is assumed, not logged into, and what you get back always expires."
+  deny_overrides_allow:
+    prompt: "If one policy statement Allows an action and another explicitly Denies it, what happens?"
+    options:
+      A: "The Allow wins because it was evaluated first"
+      B: "AWS asks the account owner to break the tie"
+      C: "The explicit Deny always wins"
+      D: "Both are ignored and the action defaults to Allow"
+    correct: C
+    praise: "Exactly -- an explicit Deny always wins, full stop."
+  root_user_limits:
+    prompt: "Can the AWS root user's permissions be restricted by an IAM policy?"
+    options:
+      A: "Yes, the same as any IAM user"
+      B: "No, the root user has unrestricted access that can't be limited by policy"
+      C: "Only if MFA is disabled"
+      D: "Only for S3 actions"
+    correct: B
+    praise: "Correct -- which is exactly why AWS says to lock the root user away and work through IAM users/roles instead."
