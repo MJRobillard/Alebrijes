@@ -49,4 +49,4 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-alebrijes = ["frontend/*.html", "llm/*.md"]
+alebrijes = ["frontend/*.html", "llm/*.md", "fillibusters/*.txt", "fillibusters/*.yaml"]

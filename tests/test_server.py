@@ -636,25 +636,39 @@ def test_quiz_route_is_unauthenticated_static_shell() -> None:
     assert "text/html" in response.headers["content-type"]
 
 
-def test_fillibusters_endpoint_lists_queue_in_pop_order(tmp_path: Path) -> None:
+def _write_fillibuster_fixture(
+    directory: Path, fillibuster_id: str, text: str, *, title: str | None = None, description: str = ""
+) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{fillibuster_id}.txt").write_text(text, encoding="utf-8")
+    (directory / f"{fillibuster_id}.yaml").write_text(
+        f"title: {title or fillibuster_id}\ndescription: {description}\n", encoding="utf-8"
+    )
+
+
+def test_fillibusters_endpoint_lists_library_metadata(tmp_path: Path) -> None:
     fillibusters_dir = tmp_path / "fillibusters"
-    fillibusters_dir.mkdir()
-    _write_wav_fixture(fillibusters_dir / "a.wav", value=1)
-    _write_wav_fixture(fillibusters_dir / "b.wav", value=2)
+    _write_fillibuster_fixture(fillibusters_dir, "a", "Filler A.", title="A Title", description="About A")
+    _write_fillibuster_fixture(fillibusters_dir, "b", "Filler B.", title="B Title", description="About B")
 
     client = _client(fillibusters_dir=fillibusters_dir)
     response = client.get("/api/fillibusters", headers=_headers())
 
     assert response.status_code == 200
-    assert response.json() == {"queue": ["a.wav", "b.wav"]}
+    assert response.json() == {
+        "fillibusters": [
+            {"id": "a", "title": "A Title", "description": "About A"},
+            {"id": "b", "title": "B Title", "description": "About B"},
+        ]
+    }
 
 
-def test_fillibusters_endpoint_empty_when_no_clips_configured(tmp_path: Path) -> None:
+def test_fillibusters_endpoint_empty_when_no_scripts_configured(tmp_path: Path) -> None:
     client = _client(fillibusters_dir=tmp_path / "does-not-exist")
     response = client.get("/api/fillibusters", headers=_headers())
 
     assert response.status_code == 200
-    assert response.json() == {"queue": []}
+    assert response.json() == {"fillibusters": []}
 
 
 # --- /api/rag/build ---------------------------------------------------------
@@ -856,20 +870,11 @@ def test_session_start_with_chat_model_pins_it_for_that_sessions_chat_calls(tmp_
     assert seen_models == ["deepseek-r1:1.5b"]
 
 
-def _write_wav_fixture(path: Path, *, sample_rate: int = 8000, seconds: float = 0.05, value: int = 1) -> None:
-    from scipy.io import wavfile
-
-    import numpy as np
-
-    n_samples = int(sample_rate * seconds)
-    wavfile.write(path, sample_rate, np.full(n_samples, value, dtype=np.int16))
-
 
 def test_ws_chat_streams_filler_audio_while_waiting_on_a_slow_reply(tmp_path: Path) -> None:
     m4b_path, cast_path = _setup_session_fixture(tmp_path)
     fillibusters_dir = tmp_path / "fillibusters"
-    fillibusters_dir.mkdir()
-    _write_wav_fixture(fillibusters_dir / "a.wav")
+    _write_fillibuster_fixture(fillibusters_dir, "a", "Filler sentence one.")
 
     def slow_chat_stream(messages, *, model="hermes3:8b"):
         time.sleep(0.7)  # comfortably past _FILLER_START_DELAY_S (0.4s)
@@ -882,7 +887,9 @@ def test_ws_chat_streams_filler_audio_while_waiting_on_a_slow_reply(tmp_path: Pa
         fillibusters_dir=fillibusters_dir,
     )
     start = client.post(
-        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+        "/api/session/start",
+        headers=_headers(),
+        json={"m4b": str(m4b_path), "cast": str(cast_path), "fillibuster_ids": ["a"]},
     )
     session_id = start.json()["session_id"]
 
@@ -904,17 +911,39 @@ def test_ws_chat_streams_filler_audio_while_waiting_on_a_slow_reply(tmp_path: Pa
     assert "filler_audio_chunk" not in types[first_real_audio:]
 
 
-def test_ws_chat_streams_multiple_distinct_filler_clips_back_to_back(tmp_path: Path) -> None:
+class _TextVaryingSynthAgent:
+    """Like _FakeSynthAgent, but its output actually depends on the input
+    text (length-keyed) -- proves distinct fillibuster sentences really get
+    synthesized and sent, not the same clip repeated."""
+
+    sample_rate = 8000
+
+    def use_voice_state(self, voice, state) -> None:
+        pass
+
+    def synthesize(self, text: str):
+        import numpy as np
+
+        return np.full(50, len(text) % 256, dtype=np.int16)
+
+    def stream_chunks(self, text: str):
+        yield self.synthesize(text)
+
+
+def test_ws_chat_streams_multiple_distinct_fillibuster_sentences_back_to_back(tmp_path: Path) -> None:
     """Regression test for the one-ahead prefetch restructure in
     _filler_loop (mirrors LookaheadRenderer/_drain_chapters's "keep the
-    next one ready" pattern) -- with two distinct clips in the queue and a
-    long enough wait, playback should cycle through both, not stall or
-    repeat the same clip's fetch forever."""
+    next one ready" pattern) -- with a fillibuster script long enough for
+    several sentences and a long enough wait, playback should read through
+    them in order, not stall or repeat the same sentence's synthesis
+    forever."""
     m4b_path, cast_path = _setup_session_fixture(tmp_path)
     fillibusters_dir = tmp_path / "fillibusters"
-    fillibusters_dir.mkdir()
-    _write_wav_fixture(fillibusters_dir / "a.wav", seconds=0.05, value=1)
-    _write_wav_fixture(fillibusters_dir / "b.wav", seconds=0.05, value=2)
+    _write_fillibuster_fixture(
+        fillibusters_dir,
+        "a",
+        "First filler sentence here. Second filler sentence, noticeably longer than the first one.",
+    )
 
     def slow_chat_stream(messages, *, model="hermes3:8b"):
         time.sleep(1.0)  # comfortably past a few filler rotations
@@ -923,11 +952,13 @@ def test_ws_chat_streams_multiple_distinct_filler_clips_back_to_back(tmp_path: P
     client = _client(
         embed_fn=_fake_embed_fn,
         chat_stream_fn=slow_chat_stream,
-        build_narrator_agent_fn=lambda cast_file: _FakeSynthAgent(),
+        build_narrator_agent_fn=lambda cast_file: _TextVaryingSynthAgent(),
         fillibusters_dir=fillibusters_dir,
     )
     start = client.post(
-        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+        "/api/session/start",
+        headers=_headers(),
+        json={"m4b": str(m4b_path), "cast": str(cast_path), "fillibuster_ids": ["a"]},
     )
     session_id = start.json()["session_id"]
 
@@ -942,7 +973,7 @@ def test_ws_chat_streams_multiple_distinct_filler_clips_back_to_back(tmp_path: P
 
     filler_payloads = [m["data"] for m in received if m["type"] == "filler_audio_chunk"]
     assert len(filler_payloads) >= 2
-    assert len(set(filler_payloads)) >= 2  # both distinct clips actually streamed, not one repeated
+    assert len(set(filler_payloads)) >= 2  # both distinct sentences actually streamed, not one repeated
 
 
 class _FakeKeepWarmHandle:

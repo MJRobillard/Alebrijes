@@ -54,7 +54,7 @@ from alebrijes.llm.scripter import MODEL_NAME as SCRIPTER_MODEL_NAME
 from alebrijes.preview import synthesize_preview as default_synthesize_preview
 from alebrijes.render import NARRATOR, render_book as default_render_book
 from alebrijes.session import DEFAULT_MAX_IMPROV_EXCHANGES, InteractiveSession, SessionMode
-from alebrijes.session.fillibuster import list_fillibuster_queue, next_fillibuster
+from alebrijes.session.fillibuster_library import list_fillibusters, load_fillibuster_sentences
 from alebrijes.synth.streaming import SentenceChunker
 from alebrijes.transcript import Transcript, load as load_transcript
 
@@ -256,6 +256,10 @@ class SessionStartRequest(BaseModel):
     checkpoints: list[str] = []
     chat_model: Optional[str] = None  # overrides the server's default Ollama chat model for this session only
     max_improv_exchanges: Optional[int] = None  # CYOA: turns of free improv before steering back to plot
+    # Listener-chosen fillibuster library scripts (see /api/fillibusters),
+    # read in this order while a checkpoint's wrong-answer/chat reply is in
+    # flight -- see session.fillibuster_library.
+    fillibuster_ids: list[str] = []
 
 
 class SessionStartResponse(BaseModel):
@@ -281,6 +285,10 @@ class SessionStartLiveRequest(BaseModel):
     rag_json: Optional[str] = None
     quiz_path: Optional[str] = None  # <name>.quiz.yaml; progress persists to its .progress.json sibling
     coffee_path: Optional[str] = None  # <name>.coffee.md, free-form CYOA/"coffee mode" premise
+    # Listener-chosen fillibuster library scripts (see /api/fillibusters),
+    # read in this order while a checkpoint's wrong-answer/chat reply is in
+    # flight -- see session.fillibuster_library.
+    fillibuster_ids: list[str] = []
 
 
 IngestFn = Callable[[Path], Book]
@@ -489,11 +497,16 @@ def create_app(
 
     @app.get("/api/fillibusters", dependencies=[Depends(_verify_request)])
     def fillibusters() -> dict:
-        # A peek (list_fillibuster_queue never pops/rotates), so polling
-        # this to refresh a "what's queued" display doesn't itself disturb
-        # the queue -- only next_fillibuster (used inside _filler_loop)
-        # actually consumes/rotates it.
-        return {"queue": list_fillibuster_queue(fillibusters_dir)}
+        # Lists the repo-committed fillibuster script library (title/
+        # description per entry) for quiz.html's start-form picker -- the
+        # listener's selection is sent back as SessionStart(Live)Request.
+        # fillibuster_ids, in the order they want them read.
+        return {
+            "fillibusters": [
+                {"id": meta.id, "title": meta.title, "description": meta.description}
+                for meta in list_fillibusters(fillibusters_dir)
+            ]
+        }
 
     @app.get("/api/voices", response_model=VoicesResponse, dependencies=[Depends(_verify_request)])
     def voices() -> VoicesResponse:
@@ -816,6 +829,11 @@ def create_app(
         transcript = load_transcript(transcript_path)
         rag_index = load_rag_index(rag_npz_path, rag_json_path)
 
+        try:
+            fillibuster_sentences = load_fillibuster_sentences(fillibusters_dir, payload.fillibuster_ids)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
         interactive_session = InteractiveSession(
             book_title=transcript.book_title,
             character_voice=NARRATOR,
@@ -830,6 +848,7 @@ def create_app(
                 if payload.max_improv_exchanges is not None
                 else DEFAULT_MAX_IMPROV_EXCHANGES
             ),
+            fillibuster_sentences=fillibuster_sentences,
         )
 
         try:
@@ -914,6 +933,11 @@ def create_app(
             if coffee_file_path.exists():
                 coffee_premise = lesson.load_coffee_premise(coffee_file_path)
 
+        try:
+            fillibuster_sentences = load_fillibuster_sentences(fillibusters_dir, payload.fillibuster_ids)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
         transcript = Transcript(book_title=book.title, chapters=[], spans=[])
         interactive_session = InteractiveSession(
             book_title=book.title,
@@ -933,6 +957,7 @@ def create_app(
             quiz_checkpoints=book.quiz_checkpoints,
             quiz_progress_path=quiz_progress_path,
             coffee_premise=coffee_premise,
+            fillibuster_sentences=fillibuster_sentences,
         )
 
         chapter_queue: "queue_module.Queue" = queue_module.Queue()
@@ -1077,12 +1102,12 @@ def create_app(
                 }
             )
 
-        async def _send_filler_audio(filler) -> None:
-            wav_bytes = _audio_to_wav_bytes(filler.sample_rate, filler.audio)
+        async def _send_filler_audio(audio: "np.ndarray", sample_rate: int) -> None:
+            wav_bytes = _audio_to_wav_bytes(sample_rate, audio)
             await _send(
                 {
                     "type": "filler_audio_chunk",
-                    "sample_rate": filler.sample_rate,
+                    "sample_rate": sample_rate,
                     "data": base64.b64encode(wav_bytes).decode("ascii"),
                 }
             )
@@ -1103,47 +1128,23 @@ def create_app(
             actual network delivery, not fired-and-forgotten from a thread
             that's about to move on to the next sentence.
 
-            `enable_filler=True` streams pre-rendered filler audio (see
-            `session.fillibuster`) from `fillibusters_dir` while nothing
-            real has been sent yet -- meant for the wrong-answer/chat path
-            (the `listen.html` "Thinking..." indicator's exact spot), not
-            `advance_position`'s checkpoint responses, which are usually
-            already prefetched by the time playback reaches them (see
-            `InteractiveSession.prefetch_checkpoint`). Waits
-            `_FILLER_START_DELAY_S` before its first chunk so a fast path
-            (e.g. a correct answer's praise, which never calls the LLM at
-            all) never triggers it; stops the moment real audio is about to
-            go out. A no-op, silently, if the directory holds no filler
-            files -- never a hard dependency.
+            `enable_filler=True` speaks the listener's chosen fillibuster
+            library scripts (`InteractiveSession.fillibuster_sentences`, see
+            `session.fillibuster_library`) live, one sentence at a time,
+            while nothing real has been sent yet -- meant for the
+            wrong-answer/chat path (the `quiz.html` "Thinking..." indicator's
+            exact spot), not `advance_position`'s checkpoint responses,
+            which are usually already prefetched by the time playback
+            reaches them (see `InteractiveSession.prefetch_checkpoint`).
+            Waits `_FILLER_START_DELAY_S` before its first sentence so a
+            fast path (e.g. a correct answer's praise, which never calls
+            the LLM at all) never triggers it; stops the moment real audio
+            is about to go out. A no-op, silently, if the listener picked no
+            scripts (or has already read through everything picked) --
+            never a hard dependency.
             """
             loop = asyncio.get_running_loop()
             chunker = SentenceChunker()
-
-            filler_task: Optional[asyncio.Task] = None
-            if enable_filler and agent is not None:
-
-                async def _filler_loop() -> None:
-                    # Stays one clip ahead the same way LookaheadRenderer/
-                    # _drain_chapters stay ahead of chapter playback -- the
-                    # *next* clip is already fetched by the time the current
-                    # one finishes playing, instead of only starting that
-                    # fetch once playback catches up to it.
-                    await asyncio.sleep(_FILLER_START_DELAY_S)
-                    upcoming = await run_in_threadpool(next_fillibuster, fillibusters_dir)
-                    for _ in range(_MAX_FILLER_CHUNKS_PER_CALL):
-                        if upcoming is None:
-                            return  # no filler audio available -- just let "Thinking..." sit
-                        current = upcoming
-                        prefetch = asyncio.create_task(run_in_threadpool(next_fillibuster, fillibusters_dir))
-                        await _send_filler_audio(current)
-                        await asyncio.sleep(len(current.audio) / current.sample_rate)
-                        upcoming = await prefetch
-
-                filler_task = asyncio.create_task(_filler_loop())
-
-            def _stop_filler() -> None:
-                if filler_task is not None and not filler_task.done():
-                    loop.call_soon_threadsafe(filler_task.cancel)
 
             def _pick_character(sentence: str) -> str:
                 # Regex-pick a cast voice from the sentence's own text (see
@@ -1161,6 +1162,48 @@ def create_app(
                     if voice_states and NARRATOR in voice_states:
                         agent.use_voice_state(*voice_states[NARRATOR])
                 return character
+
+            filler_task: Optional[asyncio.Task] = None
+            if enable_filler and agent is not None:
+
+                async def _synthesize_filler_sentence(sentence: str) -> "np.ndarray":
+                    _pick_character(sentence)
+                    return await run_in_threadpool(agent.synthesize, sentence)
+
+                async def _filler_loop() -> None:
+                    # Reads the listener's chosen fillibuster library scripts
+                    # (InteractiveSession.fillibuster_sentences,
+                    # session.fillibuster_library) live, one sentence at a
+                    # time, while nothing real has been sent yet. Stays one
+                    # sentence ahead the same way LookaheadRenderer/
+                    # _drain_chapters stay ahead of chapter playback -- the
+                    # *next* sentence is already synthesizing by the time the
+                    # current one finishes playing, instead of only starting
+                    # that synthesis once playback catches up to it.
+                    await asyncio.sleep(_FILLER_START_DELAY_S)
+                    sentence = interactive_session.next_fillibuster_sentence()
+                    if sentence is None:
+                        return  # nothing left in the library -- just let "Thinking..." sit
+                    upcoming = asyncio.create_task(_synthesize_filler_sentence(sentence))
+                    for _ in range(_MAX_FILLER_CHUNKS_PER_CALL):
+                        audio = await upcoming
+                        next_sentence = interactive_session.next_fillibuster_sentence()
+                        prefetch = (
+                            asyncio.create_task(_synthesize_filler_sentence(next_sentence))
+                            if next_sentence is not None
+                            else None
+                        )
+                        await _send_filler_audio(audio, agent.sample_rate)
+                        await asyncio.sleep(len(audio) / agent.sample_rate)
+                        if prefetch is None:
+                            return  # library exhausted -- just let "Thinking..." sit
+                        upcoming = prefetch
+
+                filler_task = asyncio.create_task(_filler_loop())
+
+            def _stop_filler() -> None:
+                if filler_task is not None and not filler_task.done():
+                    loop.call_soon_threadsafe(filler_task.cancel)
 
             def _coalesced_chunks(sentence: str) -> Iterator["np.ndarray"]:
                 # Groups agent.stream_chunks's raw ~80ms internal decode

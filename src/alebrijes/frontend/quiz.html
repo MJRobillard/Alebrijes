@@ -139,7 +139,11 @@
   }
   .toggle-dot.on { background: var(--accent); }
   .toggle-dot.off { opacity: 0.5; }
-  #filler-queue-status { font-size: 0.8rem; color: var(--ink-soft); }
+  #fillibuster-picker { display: flex; flex-direction: column; gap: 0.25rem; }
+  #fillibuster-picker label { display: flex; align-items: baseline; gap: 0.4rem; font-weight: normal; cursor: pointer; }
+  #fillibuster-picker .fillibuster-order { font-variant-numeric: tabular-nums; color: var(--accent); min-width: 1.2em; }
+  #fillibuster-picker .fillibuster-desc { color: var(--ink-soft); font-size: 0.85rem; }
+  #fillibuster-picker .hint { margin: 0 0 0.25rem; }
 </style>
 </head>
 <body>
@@ -173,6 +177,13 @@
     <div class="row mt-sm">
       <select id="chat-model-select" title="Chat model used to grade wrong answers and free-text questions"></select>
     </div>
+    <div class="mt-sm">
+      <p class="hint">
+        Fillibuster scripts — read aloud, live, while a wrong-answer reply is generating. Check the
+        ones you want; the number shows the order they'll be read in (click again to unpick).
+      </p>
+      <div id="fillibuster-picker"></div>
+    </div>
     <div class="row mt-md">
       <button id="start-btn">Start</button>
       <span id="start-status" class="status"></span>
@@ -184,9 +195,8 @@
     <div id="render-progress" class="status" hidden></div>
     <div class="row mt-sm">
       <div id="book-title" style="font-weight: 600;"></div>
-      <div class="side-controls" title="Filler audio: pre-rendered clips played while a wrong-answer reply is in flight">
-        <button id="filler-toggle-dot" class="toggle-dot on" type="button" title="Filler audio (click to mute/unmute)"></button>
-        <span id="filler-queue-status"></span>
+      <div class="side-controls" title="Fillibuster audio: your chosen scripts, read live while a wrong-answer reply is in flight">
+        <button id="filler-toggle-dot" class="toggle-dot on" type="button" title="Fillibuster audio (click to mute/unmute)"></button>
       </div>
     </div>
     <audio id="player" controls></audio>
@@ -294,7 +304,6 @@
   const renderProgressEl = document.getElementById("render-progress");
   const bookTitleEl = document.getElementById("book-title");
   const fillerToggleDotEl = document.getElementById("filler-toggle-dot");
-  const fillerQueueStatusEl = document.getElementById("filler-queue-status");
   const player = document.getElementById("player");
   const transcriptEl = document.getElementById("transcript");
   const chatLog = document.getElementById("chat-log");
@@ -369,8 +378,7 @@
   const fillerAudioPlayer = makeAudioQueuePlayer(document.getElementById("filler-player"), null);
 
   // Client-side only -- the server keeps streaming filler_audio_chunk
-  // either way (cheap to generate, and the queue-status display still
-  // wants to reflect real rotation), this just decides whether to actually
+  // either way (cheap to generate), this just decides whether to actually
   // play what arrives. Defaults on.
   let fillerEnabled = true;
   fillerToggleDotEl.addEventListener("click", function () {
@@ -380,18 +388,62 @@
     if (!fillerEnabled) fillerAudioPlayer.stop();
   });
 
-  function refreshFillerQueueStatus() {
-    apiFetch("/api/fillibusters").then(function (r) { return r.json(); }).then(function (result) {
-      const queue = result.queue || [];
-      if (queue.length === 0) {
-        fillerQueueStatusEl.textContent = "no filler clips";
-      } else if (queue.length === 1) {
-        fillerQueueStatusEl.textContent = "current: " + queue[0] + " (repeats)";
-      } else {
-        fillerQueueStatusEl.textContent = "current: " + queue[0] + " · next: " + queue[1];
-      }
-    }).catch(function () { /* queue display is best-effort */ });
+  // Fillibuster library picker on the start form -- checking an entry adds
+  // it to selectedFillibusterIds in click order (that order is what's sent
+  // as fillibuster_ids, and so what order they're read in); unchecking
+  // removes it and renumbers the rest.
+  const fillibusterPickerEl = document.getElementById("fillibuster-picker");
+  let selectedFillibusterIds = [];
+
+  function renumberFillibusterPicker() {
+    fillibusterPickerEl.querySelectorAll("label").forEach(function (label) {
+      const id = label.dataset.fillibusterId;
+      const order = selectedFillibusterIds.indexOf(id);
+      label.querySelector(".fillibuster-order").textContent = order === -1 ? "" : String(order + 1) + ".";
+    });
   }
+
+  function populateFillibusterPicker() {
+    apiFetch("/api/fillibusters").then(function (r) { return r.json(); }).then(function (result) {
+      fillibusterPickerEl.innerHTML = "";
+      const fillibusters = result.fillibusters || [];
+      if (fillibusters.length === 0) {
+        fillibusterPickerEl.innerHTML = '<span class="hint">No fillibuster scripts configured.</span>';
+        return;
+      }
+      fillibusters.forEach(function (meta) {
+        const label = document.createElement("label");
+        label.dataset.fillibusterId = meta.id;
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.addEventListener("change", function () {
+          if (checkbox.checked) {
+            selectedFillibusterIds.push(meta.id);
+          } else {
+            selectedFillibusterIds = selectedFillibusterIds.filter(function (id) { return id !== meta.id; });
+          }
+          renumberFillibusterPicker();
+        });
+        const order = document.createElement("span");
+        order.className = "fillibuster-order";
+        const title = document.createElement("span");
+        title.textContent = meta.title;
+        label.appendChild(checkbox);
+        label.appendChild(order);
+        label.appendChild(title);
+        if (meta.description) {
+          const desc = document.createElement("span");
+          desc.className = "fillibuster-desc";
+          desc.textContent = "— " + meta.description;
+          label.appendChild(desc);
+        }
+        fillibusterPickerEl.appendChild(label);
+      });
+    }).catch(function () {
+      fillibusterPickerEl.innerHTML = '<span class="hint">Could not load fillibuster scripts.</span>';
+    });
+  }
+  populateFillibusterPicker();
 
   const state = {
     ws: null,
@@ -439,6 +491,7 @@
         mode: "learning",
         quiz_path: quizPath,
         chat_model: chatModelSelect.value || null,
+        fillibuster_ids: selectedFillibusterIds,
         lookahead_chapters: 3,
       }),
     }).then(function (r) { return r.json(); }).then(function (result) {
@@ -456,7 +509,6 @@
       playSection.hidden = false;
       startStatusEl.textContent = result.spoken ? "Started (spoken)." : "Started (text-only).";
       openSession(result.session_id);
-      refreshFillerQueueStatus();
       startBtn.disabled = false;
     }).catch(function (err) {
       startStatusEl.textContent = err.message || String(err);
@@ -530,7 +582,6 @@
         responseAudioPlayer.push(message.data);
       } else if (message.type === "filler_audio_chunk") {
         if (fillerEnabled) fillerAudioPlayer.push(message.data);
-        refreshFillerQueueStatus(); // reflects the server's rotation either way
       } else if (message.type === "error") {
         clearResponseWatchdog();
         thinkingEl.hidden = true;
