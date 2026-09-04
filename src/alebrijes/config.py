@@ -30,4 +30,13 @@ class Config:
     # GUI's voice picker looks for them. Not committed to the repo (Phase 0):
     # empty on a fresh clone until the user runs `alebrijes voices add`.
     voices_dir: Path = field(default_factory=lambda: Path.home() / ".local" / "share" / "alebrijes" / "voices")
+    # Pre-rendered, generic filler audio (session.fillibuster) played while a
+    # checkpoint's wrong-answer/chat LLM reply is in flight. One shared pool,
+    # not per-book -- content is meant to be topic-level/reusable, not tied
+    # to a specific question. Empty by default; a missing/empty directory is
+    # a normal "no filler available" state, not an error (see
+    # session/fillibuster.py).
+    fillibusters_dir: Path = field(
+        default_factory=lambda: Path.home() / ".local" / "share" / "alebrijes" / "fillibusters"
+    )
     max_workers: int | None = None  # None -> synth.parallel.recommended_worker_count picks one

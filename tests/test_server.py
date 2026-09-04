@@ -822,6 +822,227 @@ def test_session_start_with_chat_model_pins_it_for_that_sessions_chat_calls(tmp_
     assert seen_models == ["deepseek-r1:1.5b"]
 
 
+def _write_wav_fixture(path: Path, *, sample_rate: int = 8000, seconds: float = 0.05, value: int = 1) -> None:
+    from scipy.io import wavfile
+
+    import numpy as np
+
+    n_samples = int(sample_rate * seconds)
+    wavfile.write(path, sample_rate, np.full(n_samples, value, dtype=np.int16))
+
+
+def test_ws_chat_streams_filler_audio_while_waiting_on_a_slow_reply(tmp_path: Path) -> None:
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+    fillibusters_dir = tmp_path / "fillibusters"
+    fillibusters_dir.mkdir()
+    _write_wav_fixture(fillibusters_dir / "a.wav")
+
+    def slow_chat_stream(messages, *, model="hermes3:8b"):
+        time.sleep(0.7)  # comfortably past _FILLER_START_DELAY_S (0.4s)
+        yield "Real reply."
+
+    client = _client(
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=slow_chat_stream,
+        build_narrator_agent_fn=lambda cast_file: _FakeSynthAgent(),
+        fillibusters_dir=fillibusters_dir,
+    )
+    start = client.post(
+        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.send_json({"type": "chat", "text": "hi"})
+        received = []
+        while True:
+            msg = ws.receive_json()
+            received.append(msg)
+            if msg["type"] == "answer":
+                break
+
+    types = [m["type"] for m in received]
+    assert "filler_audio_chunk" in types
+    assert types[-1] == "answer"
+    # Once real audio starts, filler must not resume -- it's a stand-in for
+    # the wait, not something that plays alongside the real reply.
+    first_real_audio = types.index("audio_chunk")
+    assert "filler_audio_chunk" not in types[first_real_audio:]
+
+
+def test_ws_chat_streams_multiple_distinct_filler_clips_back_to_back(tmp_path: Path) -> None:
+    """Regression test for the one-ahead prefetch restructure in
+    _filler_loop (mirrors LookaheadRenderer/_drain_chapters's "keep the
+    next one ready" pattern) -- with two distinct clips in the queue and a
+    long enough wait, playback should cycle through both, not stall or
+    repeat the same clip's fetch forever."""
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+    fillibusters_dir = tmp_path / "fillibusters"
+    fillibusters_dir.mkdir()
+    _write_wav_fixture(fillibusters_dir / "a.wav", seconds=0.05, value=1)
+    _write_wav_fixture(fillibusters_dir / "b.wav", seconds=0.05, value=2)
+
+    def slow_chat_stream(messages, *, model="hermes3:8b"):
+        time.sleep(1.0)  # comfortably past a few filler rotations
+        yield "Real reply."
+
+    client = _client(
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=slow_chat_stream,
+        build_narrator_agent_fn=lambda cast_file: _FakeSynthAgent(),
+        fillibusters_dir=fillibusters_dir,
+    )
+    start = client.post(
+        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.send_json({"type": "chat", "text": "hi"})
+        received = []
+        while True:
+            msg = ws.receive_json()
+            received.append(msg)
+            if msg["type"] == "answer":
+                break
+
+    filler_payloads = [m["data"] for m in received if m["type"] == "filler_audio_chunk"]
+    assert len(filler_payloads) >= 2
+    assert len(set(filler_payloads)) >= 2  # both distinct clips actually streamed, not one repeated
+
+
+class _FakeKeepWarmHandle:
+    def __init__(self) -> None:
+        self.stopped = False
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+class _FakeOllamaClient:
+    """Stands in for `alebrijes.llm.ollama.OllamaClient` so a test can
+    assert on `.keep_warm()`/`.stop()` calls without a real Ollama server.
+    `create_app` imports `OllamaClient` from `alebrijes.llm.ollama` inside
+    its own body (a fresh lookup on every call), so monkeypatching the name
+    in that module is enough to substitute this in."""
+
+    instances: list["_FakeOllamaClient"] = []
+
+    def __init__(self, *args, **kwargs) -> None:
+        self.keep_warm_calls: list[_FakeKeepWarmHandle] = []
+        _FakeOllamaClient.instances.append(self)
+
+    def chat_stream(self, messages, *, model="hermes3:8b"):
+        yield "ok"
+
+    def embed(self, text: str):
+        import numpy as np
+
+        return np.zeros(2, dtype=np.float32)
+
+    def list_models(self) -> list[str]:
+        return []
+
+    def keep_warm(self, *args, **kwargs) -> _FakeKeepWarmHandle:
+        handle = _FakeKeepWarmHandle()
+        self.keep_warm_calls.append(handle)
+        return handle
+
+
+def test_ws_keeps_the_real_chat_model_warm_for_the_connections_lifetime(tmp_path, monkeypatch) -> None:
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+    _FakeOllamaClient.instances = []
+    monkeypatch.setattr("alebrijes.llm.ollama.OllamaClient", _FakeOllamaClient)
+
+    # Only chat_stream_fn is left to create_app's default (real-client)
+    # branch, so exactly one _FakeOllamaClient instance -- the chat one --
+    # gets created.
+    client = _client(embed_fn=_fake_embed_fn, list_models_fn=lambda: [])
+    start = client.post(
+        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+    )
+    session_id = start.json()["session_id"]
+
+    chat_client = _FakeOllamaClient.instances[0]
+    assert chat_client.keep_warm_calls == []
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        assert len(chat_client.keep_warm_calls) == 1
+        handle = chat_client.keep_warm_calls[0]
+        assert handle.stopped is False
+
+        # Sent as soon as the connection opens, before any client message --
+        # this is what lets the frontend's pulse dot initialize correctly.
+        state_msg = ws.receive_json()
+        assert state_msg == {"type": "keep_warm_state", "available": True, "enabled": True}
+
+        ws.send_json({"type": "chat", "text": "hi"})
+        ws.receive_json()
+
+    assert handle.stopped is True
+
+
+def test_ws_keep_warm_toggle_stops_and_restarts_the_heartbeat(tmp_path, monkeypatch) -> None:
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+    _FakeOllamaClient.instances = []
+    monkeypatch.setattr("alebrijes.llm.ollama.OllamaClient", _FakeOllamaClient)
+
+    client = _client(embed_fn=_fake_embed_fn, list_models_fn=lambda: [])
+    start = client.post(
+        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+    )
+    session_id = start.json()["session_id"]
+    chat_client = _FakeOllamaClient.instances[0]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        initial = ws.receive_json()
+        assert initial == {"type": "keep_warm_state", "available": True, "enabled": True}
+        first_handle = chat_client.keep_warm_calls[0]
+
+        ws.send_json({"type": "keep_warm_toggle", "enabled": False})
+        off_state = ws.receive_json()
+        assert off_state == {"type": "keep_warm_state", "available": True, "enabled": False}
+        assert first_handle.stopped is True
+        assert len(chat_client.keep_warm_calls) == 1  # no new heartbeat started by turning off
+
+        ws.send_json({"type": "keep_warm_toggle", "enabled": True})
+        on_state = ws.receive_json()
+        assert on_state == {"type": "keep_warm_state", "available": True, "enabled": True}
+        assert len(chat_client.keep_warm_calls) == 2  # a fresh heartbeat started
+        second_handle = chat_client.keep_warm_calls[1]
+        assert second_handle.stopped is False
+
+
+def test_ws_does_not_keep_warm_when_session_is_pinned_to_the_local_scripter_model(tmp_path, monkeypatch) -> None:
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+    _FakeOllamaClient.instances = []
+    monkeypatch.setattr("alebrijes.llm.ollama.OllamaClient", _FakeOllamaClient)
+    monkeypatch.setattr(
+        "alebrijes.llm.scripter.ScripterClient.chat_stream",
+        lambda self, messages: iter(["ok"]),
+    )
+
+    client = _client(embed_fn=_fake_embed_fn, list_models_fn=lambda: [])
+    start = client.post(
+        "/api/session/start",
+        headers=_headers(),
+        json={"m4b": str(m4b_path), "cast": str(cast_path), "chat_model": "local"},
+    )
+    session_id = start.json()["session_id"]
+
+    chat_client = _FakeOllamaClient.instances[0]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.send_json({"type": "chat", "text": "hi"})
+        # No initial keep_warm_state frame for an unavailable session -- the
+        # first message is real response content (audio_chunk or answer,
+        # depending on whether a narrator agent built), never a status frame.
+        first = ws.receive_json()
+        assert first["type"] != "keep_warm_state"
+
+    assert chat_client.keep_warm_calls == []
+
+
 def test_pick_voice_for_text_returns_earliest_named_character() -> None:
     from alebrijes.server import _pick_voice_for_text
 

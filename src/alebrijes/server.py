@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import io
 import re
 import secrets
@@ -53,6 +54,7 @@ from alebrijes.llm.scripter import MODEL_NAME as SCRIPTER_MODEL_NAME
 from alebrijes.preview import synthesize_preview as default_synthesize_preview
 from alebrijes.render import NARRATOR, render_book as default_render_book
 from alebrijes.session import DEFAULT_MAX_IMPROV_EXCHANGES, InteractiveSession, SessionMode
+from alebrijes.session.fillibuster import next_fillibuster
 from alebrijes.synth.streaming import SentenceChunker
 from alebrijes.transcript import Transcript, load as load_transcript
 
@@ -395,6 +397,16 @@ def _default_ingest_book(book_path: Path) -> Book:
     return parse_book(book_path)
 
 
+# How long to wait for a real sentence before starting filler audio (see
+# _speak_llm_call's enable_filler) -- long enough that a fast path (a
+# correct quiz answer's praise, spoken with no LLM call at all) never
+# triggers it, short enough to still cover a real LLM round-trip's wait.
+_FILLER_START_DELAY_S = 0.4
+# Safety valve against looping filler forever if a real reply never arrives
+# (e.g. a hung/misbehaving chat backend) -- ordinary use never gets close.
+_MAX_FILLER_CHUNKS_PER_CALL = 20
+
+
 def create_app(
     token: str,
     *,
@@ -404,6 +416,7 @@ def create_app(
     synthesize_preview_fn: SynthesizePreviewFn = default_synthesize_preview,
     import_voice_fn: ImportVoiceFn = _default_import_voice,
     voices_dir: Optional[Path] = None,
+    fillibusters_dir: Optional[Path] = None,
     embed_fn: Optional[EmbedFn] = None,
     chat_stream_fn: Optional[ChatStreamFn] = None,
     list_models_fn: Optional[Callable[[], list[str]]] = None,
@@ -412,6 +425,14 @@ def create_app(
 ) -> FastAPI:
     if voices_dir is None:
         voices_dir = Config().voices_dir
+    if fillibusters_dir is None:
+        fillibusters_dir = Config().fillibusters_dir
+    # Kept as a real OllamaClient (not just its bound .chat_stream method) so
+    # session_ws can call .keep_warm() on the exact instance a live session's
+    # chat calls actually go through -- stays None whenever a caller supplies
+    # its own chat_stream_fn (every test in this suite does), so keep_warm
+    # never starts a background thread hitting a real Ollama server in tests.
+    default_ollama_chat_client: Optional[object] = None
     if embed_fn is None:
         from alebrijes.llm.ollama import OllamaClient
 
@@ -419,7 +440,8 @@ def create_app(
     if chat_stream_fn is None:
         from alebrijes.llm.ollama import OllamaClient
 
-        chat_stream_fn = OllamaClient().chat_stream
+        default_ollama_chat_client = OllamaClient()
+        chat_stream_fn = default_ollama_chat_client.chat_stream
     if list_models_fn is None:
         from alebrijes.llm.ollama import OllamaClient
 
@@ -797,7 +819,11 @@ def create_app(
             agent = None
 
         session_id = uuid.uuid4().hex
-        sessions[session_id] = {"session": interactive_session, "agent": agent}
+        sessions[session_id] = {
+            "session": interactive_session,
+            "agent": agent,
+            "uses_ollama_chat": payload.chat_model != SCRIPTER_MODEL_NAME,
+        }
 
         return SessionStartResponse(session_id=session_id, book_title=transcript.book_title, spoken=agent is not None)
 
@@ -937,6 +963,7 @@ def create_app(
             "progress_queue": progress_queue,
             "cast_file": cast_file,
             "voice_states": voice_states,
+            "uses_ollama_chat": payload.chat_model != SCRIPTER_MODEL_NAME,
         }
 
         return SessionStartResponse(session_id=session_id, book_title=book.title, spoken=True)
@@ -973,6 +1000,21 @@ def create_app(
         progress_queue = entry.get("progress_queue")
         cast_file = entry.get("cast_file")
         voice_states = entry.get("voice_states")
+
+        # Keep the real chat model warm for the lifetime of this connection
+        # so a wrong-answer/chat checkpoint doesn't pay a cold-start reload
+        # (measured at 15-38s on this repo's own test hardware -- see
+        # ollama_latency.py) right when the listener is waiting on it. Only
+        # for sessions actually using the server's default Ollama client --
+        # never for a session pinned to the local scripter model, and never
+        # in a test/server-embedder that supplied its own chat_stream_fn
+        # (default_ollama_chat_client is None there).
+        # `keep_warm_available` is fixed for the connection's lifetime (a
+        # session pinned to the local scripter model, or a test-injected
+        # chat_stream_fn, never has a real client to warm); `keep_warm_handle`
+        # toggles at runtime via the "keep_warm_toggle" message below.
+        keep_warm_available = bool(entry.get("uses_ollama_chat")) and default_ollama_chat_client is not None
+        keep_warm_handle = default_ollama_chat_client.keep_warm() if keep_warm_available else None
 
         # Two coroutines can both push frames on this socket -- the request/
         # response loop below, and (for a live session) the chapter-drain
@@ -1016,7 +1058,17 @@ def create_app(
                 }
             )
 
-        async def _speak_llm_call(call_with_on_delta):
+        async def _send_filler_audio(filler) -> None:
+            wav_bytes = _audio_to_wav_bytes(filler.sample_rate, filler.audio)
+            await _send(
+                {
+                    "type": "filler_audio_chunk",
+                    "sample_rate": filler.sample_rate,
+                    "data": base64.b64encode(wav_bytes).decode("ascii"),
+                }
+            )
+
+        async def _speak_llm_call(call_with_on_delta, *, enable_filler: bool = False):
             """Runs a blocking `InteractiveSession` call (`handle_user_message`
             or `advance_position`) in a worker thread, sending each sentence's
             audio out over the socket the moment it's synthesized instead of
@@ -1031,9 +1083,48 @@ def create_app(
             and blocks on the result -- keeps chunks in order and paced by
             actual network delivery, not fired-and-forgotten from a thread
             that's about to move on to the next sentence.
+
+            `enable_filler=True` streams pre-rendered filler audio (see
+            `session.fillibuster`) from `fillibusters_dir` while nothing
+            real has been sent yet -- meant for the wrong-answer/chat path
+            (the `listen.html` "Thinking..." indicator's exact spot), not
+            `advance_position`'s checkpoint responses, which are usually
+            already prefetched by the time playback reaches them (see
+            `InteractiveSession.prefetch_checkpoint`). Waits
+            `_FILLER_START_DELAY_S` before its first chunk so a fast path
+            (e.g. a correct answer's praise, which never calls the LLM at
+            all) never triggers it; stops the moment real audio is about to
+            go out. A no-op, silently, if the directory holds no filler
+            files -- never a hard dependency.
             """
             loop = asyncio.get_running_loop()
             chunker = SentenceChunker()
+
+            filler_task: Optional[asyncio.Task] = None
+            if enable_filler and agent is not None:
+
+                async def _filler_loop() -> None:
+                    # Stays one clip ahead the same way LookaheadRenderer/
+                    # _drain_chapters stay ahead of chapter playback -- the
+                    # *next* clip is already fetched by the time the current
+                    # one finishes playing, instead of only starting that
+                    # fetch once playback catches up to it.
+                    await asyncio.sleep(_FILLER_START_DELAY_S)
+                    upcoming = await run_in_threadpool(next_fillibuster, fillibusters_dir)
+                    for _ in range(_MAX_FILLER_CHUNKS_PER_CALL):
+                        if upcoming is None:
+                            return  # no filler audio available -- just let "Thinking..." sit
+                        current = upcoming
+                        prefetch = asyncio.create_task(run_in_threadpool(next_fillibuster, fillibusters_dir))
+                        await _send_filler_audio(current)
+                        await asyncio.sleep(len(current.audio) / current.sample_rate)
+                        upcoming = await prefetch
+
+                filler_task = asyncio.create_task(_filler_loop())
+
+            def _stop_filler() -> None:
+                if filler_task is not None and not filler_task.done():
+                    loop.call_soon_threadsafe(filler_task.cancel)
 
             def _synthesize(sentence: str) -> tuple["np.ndarray", str]:
                 # Regex-pick a cast voice from the sentence's own text (see
@@ -1056,18 +1147,26 @@ def create_app(
                 if agent is None:
                     return
                 for sentence in chunker.feed(delta):
+                    _stop_filler()
                     audio, character = _synthesize(sentence)
                     asyncio.run_coroutine_threadsafe(
                         _send_audio(audio, text=sentence, character=character), loop
                     ).result()
 
-            event = await run_in_threadpool(call_with_on_delta, _on_delta if agent is not None else None)
+            try:
+                event = await run_in_threadpool(call_with_on_delta, _on_delta if agent is not None else None)
+                _stop_filler()
 
-            if agent is not None:
-                tail = chunker.flush()
-                if tail:
-                    audio, character = _synthesize(tail)
-                    await _send_audio(audio, text=tail, character=character)
+                if agent is not None:
+                    tail = chunker.flush()
+                    if tail:
+                        audio, character = _synthesize(tail)
+                        await _send_audio(audio, text=tail, character=character)
+            finally:
+                if filler_task is not None:
+                    filler_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await filler_task
 
             return event
 
@@ -1188,6 +1287,14 @@ def create_app(
         drain_task = asyncio.create_task(_drain_chapters()) if chapter_queue is not None else None
         progress_drain_task = asyncio.create_task(_drain_progress()) if progress_queue is not None else None
 
+        # Lets the frontend's keep-warm pulse dot initialize correctly.
+        # Sent only when keep_warm is actually available for this session --
+        # a session pinned to the local scripter model (or any caller that
+        # injected its own chat_stream_fn) never gets this extra frame, so
+        # every other WS message flow's ordering is unaffected.
+        if keep_warm_available:
+            await _send({"type": "keep_warm_state", "available": True, "enabled": keep_warm_handle is not None})
+
         try:
             while True:
                 message = await websocket.receive_json()
@@ -1212,12 +1319,29 @@ def create_app(
                         if renderer is not None:
                             renderer.mark_consumed(int(message["chapter_index"]))
 
+                    elif msg_type == "keep_warm_toggle":
+                        wants_enabled = bool(message.get("enabled"))
+                        if keep_warm_available:
+                            if wants_enabled and keep_warm_handle is None:
+                                keep_warm_handle = default_ollama_chat_client.keep_warm()
+                            elif not wants_enabled and keep_warm_handle is not None:
+                                await run_in_threadpool(keep_warm_handle.stop)
+                                keep_warm_handle = None
+                        await _send(
+                            {
+                                "type": "keep_warm_state",
+                                "available": keep_warm_available,
+                                "enabled": keep_warm_handle is not None,
+                            }
+                        )
+
                     elif msg_type in ("chat", "choice"):
                         text = message.get("text", "")
                         event = await _speak_llm_call(
                             lambda on_delta, text=text: interactive_session.handle_user_message(
                                 text, on_delta=on_delta
-                            )
+                            ),
+                            enable_filler=True,
                         )
                         await _send({"type": "answer", "text": event.text, "sources": event.sources})
 
@@ -1241,6 +1365,8 @@ def create_app(
                 task.cancel()
             if renderer is not None:
                 renderer.stop()
+            if keep_warm_handle is not None:
+                await run_in_threadpool(keep_warm_handle.stop)
             sessions.pop(session_id, None)
 
     @app.get("/api/book/transcript", dependencies=[Depends(_verify_request)])
