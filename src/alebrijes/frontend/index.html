@@ -150,6 +150,7 @@
   <p class="subtitle">
     Local, multi-voice book-to-audiobook.
     <a id="listen-link" href="#">Listen &amp; ask questions &rarr;</a>
+    <a id="quiz-link" href="#">Chapter Quiz &rarr;</a>
   </p>
 
   <div id="warning-banner" hidden></div>
@@ -235,9 +236,11 @@
 
   const listenLink = document.getElementById("listen-link");
   listenLink.href = "/listen?token=" + encodeURIComponent(token);
+  const quizLink = document.getElementById("quiz-link");
+  quizLink.href = "/quiz?token=" + encodeURIComponent(token);
   // No target="_blank": inside the pywebview window this should navigate
   // in place, like a page in a normal app, not spawn a second window --
-  // listen.html links back to "/" the same way (see its own script).
+  // listen.html/quiz.html link back to "/" the same way (see their own scripts).
 
   async function apiFetch(path, options) {
     options = options || {};

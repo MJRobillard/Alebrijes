@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Alebrijes — Chapter Quiz</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f4f0;
+    --panel: #ffffff;
+    --ink: #1c1b19;
+    --ink-soft: #6b665c;
+    --line: #ded9cd;
+    --accent: #2f6f6b;
+    --accent-ink: #ffffff;
+    --danger: #a6432f;
+    --highlight-bg: #e4efec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --panel: #1f2123;
+      --ink: #eceae4;
+      --ink-soft: #a09a8d;
+      --line: #34363a;
+      --accent: #4fa39d;
+      --accent-ink: #0e1a19;
+      --danger: #e08066;
+      --highlight-bg: #223330;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  main {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
+  .subtitle { color: var(--ink-soft); margin: 0 0 2rem; font-size: 0.9rem; }
+  .subtitle a { color: var(--accent); font-weight: 600; text-decoration: none; margin-left: 0.5rem; }
+  .subtitle a:hover { text-decoration: underline; }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 1.25rem 1.4rem;
+    margin-bottom: 1.25rem;
+  }
+  section h2 { font-size: 1rem; margin: 0 0 0.9rem; }
+  button {
+    font: inherit;
+    background: var(--accent);
+    color: var(--accent-ink);
+    border: none;
+    border-radius: 5px;
+    padding: 0.5rem 0.9rem;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .row { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
+  .mt-sm { margin-top: 0.4rem; }
+  .mt-md { margin-top: 0.75rem; }
+  .status { font-size: 0.88rem; color: var(--ink-soft); }
+  .status.error { color: var(--danger); }
+  .hint { font-size: 0.85rem; color: var(--ink-soft); margin: 0 0 0.9rem; line-height: 1.5; }
+  input[type=text] {
+    font: inherit;
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--ink);
+  }
+  audio { width: 100%; margin-top: 0.75rem; }
+  .chat-turn { padding: 0.5rem 0.7rem; border-radius: 6px; margin-bottom: 0.5rem; font-size: 0.92rem; white-space: pre-wrap; }
+  .chat-turn.user { background: var(--highlight-bg); }
+  .chat-turn.narrator { background: var(--bg); border: 1px solid var(--line); }
+  .chat-turn .role { display: block; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-soft); margin-bottom: 0.15rem; }
+  #transcript {
+    margin-top: 1rem;
+    max-height: 40vh;
+    overflow-y: auto;
+    border-top: 1px solid var(--line);
+    padding-top: 0.75rem;
+  }
+  .span-line {
+    padding: 0.5rem 0.6rem;
+    border-radius: 5px;
+    margin-bottom: 0.15rem;
+    font-size: 0.92rem;
+  }
+  .span-line .character {
+    display: block;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--ink-soft);
+    margin-bottom: 0.1rem;
+  }
+  .span-line.current {
+    background: var(--highlight-bg);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .span-line.current .character { color: var(--accent); }
+  #quiz-panel {
+    margin-top: 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 0.75rem;
+  }
+  #quiz-prompt { font-weight: 600; margin-bottom: 0.6rem; }
+  #quiz-choices-row { margin-bottom: 0.6rem; }
+  #quiz-choices-row label { display: flex; align-items: center; gap: 0.4rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Chapter Quiz</h1>
+  <p class="subtitle">
+    Plays a preprocessed script chapter by chapter and asks its tagged multiple-choice
+    question at the end of each one.
+    <a id="back-link" href="#">&larr; Back to pipeline</a>
+  </p>
+
+  <section id="start-section">
+    <h2>Start</h2>
+    <p class="hint">
+      A script (.script) with chapter headings and <code>QUIZ:</code> markers (see the
+      checkpoint-author skill), plus its companion quiz file (.quiz.yaml). Cast is
+      optional — built from the script automatically if left blank.
+    </p>
+    <div class="row">
+      <button id="choose-script-btn" hidden>Choose Script…</button>
+      <input type="text" id="script-input" placeholder="/path/to/script.script" style="flex: 1;">
+    </div>
+    <div class="row mt-sm">
+      <button id="choose-quiz-btn" hidden>Choose Quiz…</button>
+      <input type="text" id="quiz-input" placeholder="/path/to/book.quiz.yaml" style="flex: 1;">
+    </div>
+    <div class="row mt-sm">
+      <button id="choose-cast-btn" hidden>Choose Cast…</button>
+      <input type="text" id="cast-input" placeholder="/path/to/book.cast.yaml (optional)" style="flex: 1;">
+    </div>
+    <div class="row mt-md">
+      <button id="start-btn">Start</button>
+      <span id="start-status" class="status"></span>
+    </div>
+  </section>
+
+  <section id="play-section" hidden>
+    <div id="score" class="status" hidden style="font-weight: 600;"></div>
+    <div id="render-progress" class="status" hidden></div>
+    <div id="book-title" style="font-weight: 600; margin-top: 0.5rem;"></div>
+    <audio id="player" controls></audio>
+    <div id="transcript"></div>
+    <div id="chat-log" class="mt-md" style="max-height: 30vh; overflow-y: auto;"></div>
+    <div id="thinking" class="status mt-sm" hidden style="font-style: italic;">Thinking…</div>
+    <div id="quiz-panel" hidden>
+      <div id="quiz-prompt"></div>
+      <div id="quiz-choices-row" class="row"></div>
+      <div class="row">
+        <input type="text" id="quiz-text-input" placeholder="Or type your answer/question…" style="flex: 1;">
+        <button id="quiz-text-send-btn">Send</button>
+      </div>
+    </div>
+    <div class="row mt-md" id="chat-row">
+      <input type="text" id="chat-input" placeholder="Ask something…" style="flex: 1;">
+      <button id="chat-send-btn">Send</button>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  const token = new URLSearchParams(window.location.search).get("token");
+  document.getElementById("back-link").href = "/?token=" + encodeURIComponent(token);
+
+  async function apiFetch(path, options) {
+    options = options || {};
+    const headers = Object.assign({ "X-Alebrijes-Token": token }, options.headers || {});
+    if (options.body) headers["Content-Type"] = "application/json";
+    const response = await fetch(path, Object.assign({}, options, { headers }));
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || `Request failed (${response.status})`);
+    }
+    return response;
+  }
+
+  function withPywebviewApi(callback) {
+    if (window.pywebview && window.pywebview.api) return callback();
+    window.addEventListener("pywebviewready", callback, { once: true });
+  }
+
+  function detectPywebview() {
+    return new Promise(function (resolve) {
+      if (window.pywebview && window.pywebview.api) return resolve(true);
+      const timer = setTimeout(function () { resolve(false); }, 300);
+      window.addEventListener("pywebviewready", function () {
+        clearTimeout(timer);
+        resolve(true);
+      }, { once: true });
+    });
+  }
+  detectPywebview().then(function (hasPywebview) {
+    ["choose-script-btn", "choose-quiz-btn", "choose-cast-btn"].forEach(function (id) {
+      document.getElementById(id).hidden = !hasPywebview;
+    });
+  });
+
+  function wireFilePicker(buttonId, inputEl, pickFn) {
+    document.getElementById(buttonId).addEventListener("click", function () {
+      withPywebviewApi(function () {
+        window.pywebview.api[pickFn]().then(function (path) {
+          if (!path) return;
+          inputEl.value = path;
+        });
+      });
+    });
+  }
+  const scriptInput = document.getElementById("script-input");
+  const quizInput = document.getElementById("quiz-input");
+  const castInput = document.getElementById("cast-input");
+  wireFilePicker("choose-script-btn", scriptInput, "pick_script_file");
+  wireFilePicker("choose-quiz-btn", quizInput, "pick_quiz_file");
+  wireFilePicker("choose-cast-btn", castInput, "pick_cast_file");
+
+  const startBtn = document.getElementById("start-btn");
+  const startStatusEl = document.getElementById("start-status");
+  const startSection = document.getElementById("start-section");
+  const playSection = document.getElementById("play-section");
+  const scoreEl = document.getElementById("score");
+  const renderProgressEl = document.getElementById("render-progress");
+  const bookTitleEl = document.getElementById("book-title");
+  const player = document.getElementById("player");
+  const transcriptEl = document.getElementById("transcript");
+  const chatLog = document.getElementById("chat-log");
+  const thinkingEl = document.getElementById("thinking");
+  const quizPanel = document.getElementById("quiz-panel");
+  const quizPromptEl = document.getElementById("quiz-prompt");
+  const quizChoicesRow = document.getElementById("quiz-choices-row");
+  const quizTextInput = document.getElementById("quiz-text-input");
+  const quizTextSendBtn = document.getElementById("quiz-text-send-btn");
+  const chatRow = document.getElementById("chat-row");
+  const chatInput = document.getElementById("chat-input");
+  const chatSendBtn = document.getElementById("chat-send-btn");
+
+  const state = {
+    ws: null,
+    sessionId: null,
+    chapterQueue: [],
+    playingChapter: false,
+    currentChapterIndex: null,
+    currentChapterSpans: [],
+    currentSpanId: null,
+  };
+
+  function appendChatTurn(role, text) {
+    const div = document.createElement("div");
+    div.className = "chat-turn " + role;
+    if (role !== "live") {
+      const roleEl = document.createElement("span");
+      roleEl.className = "role";
+      roleEl.textContent = role === "user" ? "You" : "Narrator";
+      div.appendChild(roleEl);
+    }
+    div.appendChild(document.createTextNode(text));
+    chatLog.appendChild(div);
+    chatLog.scrollTop = chatLog.scrollHeight;
+  }
+
+  startBtn.addEventListener("click", function () {
+    const scriptPath = scriptInput.value.trim();
+    const quizPath = quizInput.value.trim();
+    if (!scriptPath) {
+      startStatusEl.textContent = "Script path is required.";
+      return;
+    }
+    if (!quizPath) {
+      startStatusEl.textContent = "Quiz file is required (.quiz.yaml).";
+      return;
+    }
+    startBtn.disabled = true;
+    startStatusEl.textContent = "Starting…";
+
+    apiFetch("/api/session/start_live", {
+      method: "POST",
+      body: JSON.stringify({
+        book: scriptPath,
+        cast: castInput.value.trim() || null,
+        mode: "learning",
+        quiz_path: quizPath,
+        lookahead_chapters: 3,
+      }),
+    }).then(function (r) { return r.json(); }).then(function (result) {
+      state.sessionId = result.session_id;
+      state.chapterQueue = [];
+      state.playingChapter = false;
+      state.currentChapterIndex = null;
+      state.currentChapterSpans = [];
+      state.currentSpanId = null;
+      bookTitleEl.textContent = result.book_title || "";
+      transcriptEl.innerHTML = "";
+      chatLog.innerHTML = "";
+      thinkingEl.hidden = true;
+      startSection.hidden = true;
+      playSection.hidden = false;
+      startStatusEl.textContent = result.spoken ? "Started (spoken)." : "Started (text-only).";
+      openSession(result.session_id);
+      startBtn.disabled = false;
+    }).catch(function (err) {
+      startStatusEl.textContent = err.message || String(err);
+      startBtn.disabled = false;
+    });
+  });
+
+  function openSession(sessionId) {
+    if (state.ws) {
+      try { state.ws.close(); } catch (e) { /* already closed */ }
+    }
+    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(
+      wsProtocol + "//" + window.location.host + "/api/session/" + sessionId + "/ws?token=" + encodeURIComponent(token)
+    );
+    state.ws = ws;
+
+    ws.addEventListener("message", function (evt) {
+      const message = JSON.parse(evt.data);
+      if (message.type === "chapter_ready") {
+        state.chapterQueue.push(message);
+        renderChapterSpans(message.spans);
+        if (!state.playingChapter) playNextChapter();
+        renderProgressEl.hidden = true;
+      } else if (message.type === "chapter_progress") {
+        renderProgressEl.hidden = false;
+        renderProgressEl.textContent =
+          "Rendering chapter " + (message.chapter_index + 1) + "… line " +
+          message.lines_done + " / " + message.lines_total;
+      } else if (message.type === "awaiting_input") {
+        thinkingEl.hidden = true;
+        player.pause();
+        appendChatTurn("narrator", message.text);
+        if (message.choices) {
+          showQuizPanel(message.text, message.choices);
+        } else {
+          hideQuizPanel();
+          chatInput.disabled = false;
+          chatSendBtn.disabled = false;
+          chatInput.focus();
+        }
+      } else if (message.type === "answer") {
+        thinkingEl.hidden = true;
+        appendChatTurn("narrator", message.text);
+        hideQuizPanel();
+        chatInput.disabled = false;
+        chatSendBtn.disabled = false;
+        refreshScore();
+        if (player.paused) player.play();
+      } else if (message.type === "audio_chunk") {
+        thinkingEl.hidden = true;
+        if (message.text) appendChatTurn("live", message.character + ": " + message.text);
+      } else if (message.type === "error") {
+        thinkingEl.hidden = true;
+        appendChatTurn("narrator", "Error: " + message.detail);
+        hideQuizPanel();
+        chatInput.disabled = false;
+        chatSendBtn.disabled = false;
+        renderProgressEl.hidden = true;
+      }
+    });
+  }
+
+  function playNextChapter() {
+    const next = state.chapterQueue.shift();
+    if (next === undefined) {
+      state.playingChapter = false;
+      return;
+    }
+    state.playingChapter = true;
+    state.currentChapterIndex = next.chapter_index;
+    state.currentChapterSpans = next.spans;
+    state.currentSpanId = null;
+    player.src = "data:audio/wav;base64," + next.data;
+    player.play();
+  }
+
+  player.addEventListener("ended", function () {
+    if (state.ws && state.ws.readyState === WebSocket.OPEN && state.currentChapterIndex !== null) {
+      state.ws.send(JSON.stringify({ type: "chapter_consumed", chapter_index: state.currentChapterIndex }));
+    }
+    playNextChapter();
+  });
+
+  function spanAt(currentMs) {
+    const spans = state.currentChapterSpans;
+    let lo = 0, hi = spans.length - 1, best = null;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (spans[mid].start_ms <= currentMs) {
+        best = spans[mid];
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return best;
+  }
+
+  player.addEventListener("timeupdate", function () {
+    const span = spanAt(player.currentTime * 1000);
+    if (!span || span.span_id === state.currentSpanId) return;
+
+    if (state.currentSpanId) {
+      const previous = document.getElementById("span-" + state.currentSpanId);
+      if (previous) previous.classList.remove("current");
+    }
+    state.currentSpanId = span.span_id;
+    const el = document.getElementById("span-" + span.span_id);
+    if (el) {
+      el.classList.add("current");
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+      state.ws.send(JSON.stringify({ type: "position", span_id: span.span_id }));
+    }
+  });
+
+  function renderChapterSpans(spans) {
+    const frag = document.createDocumentFragment();
+    spans.forEach(function (span) {
+      const line = document.createElement("div");
+      line.className = "span-line";
+      line.id = "span-" + span.span_id;
+
+      const character = document.createElement("span");
+      character.className = "character";
+      character.textContent = span.character;
+      line.appendChild(character);
+
+      line.appendChild(document.createTextNode(span.text));
+      frag.appendChild(line);
+    });
+    transcriptEl.appendChild(frag);
+  }
+
+  function showQuizPanel(promptText, choices) {
+    // A-D as radio options (pick one, then Submit -- not instant-send-on-
+    // click, so a stray click doesn't lock in an answer), plus a free-text
+    // box for a question instead of an answer.
+    chatRow.hidden = true;
+    quizPromptEl.textContent = promptText;
+    quizChoicesRow.innerHTML = "";
+    Object.keys(choices).forEach(function (key) {
+      const label = document.createElement("label");
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "quiz-choice";
+      radio.value = key;
+      label.appendChild(radio);
+      label.appendChild(document.createTextNode(key + ") " + choices[key]));
+      quizChoicesRow.appendChild(label);
+    });
+    const submitBtn = document.createElement("button");
+    submitBtn.textContent = "Submit Answer";
+    submitBtn.addEventListener("click", function () {
+      const picked = quizChoicesRow.querySelector("input[name='quiz-choice']:checked");
+      if (picked) sendMessage(picked.value);
+    });
+    quizChoicesRow.appendChild(submitBtn);
+    quizPanel.hidden = false;
+    quizTextInput.value = "";
+    quizTextInput.disabled = false;
+    quizTextSendBtn.disabled = false;
+  }
+
+  function hideQuizPanel() {
+    quizPanel.hidden = true;
+    quizChoicesRow.innerHTML = "";
+    chatRow.hidden = false;
+  }
+
+  function refreshScore() {
+    if (!state.sessionId) return;
+    apiFetch("/api/session/" + state.sessionId + "/score").then(function (r) { return r.json(); }).then(function (result) {
+      scoreEl.hidden = false;
+      scoreEl.textContent = "Score: " + result.correct + "/" + result.total;
+    }).catch(function () { /* score display is best-effort */ });
+  }
+
+  chatSendBtn.addEventListener("click", function () { sendMessage(chatInput.value.trim()); });
+  chatInput.addEventListener("keydown", function (evt) {
+    if (evt.key === "Enter") sendMessage(chatInput.value.trim());
+  });
+  quizTextSendBtn.addEventListener("click", function () { sendMessage(quizTextInput.value.trim()); });
+  quizTextInput.addEventListener("keydown", function (evt) {
+    if (evt.key === "Enter") sendMessage(quizTextInput.value.trim());
+  });
+
+  function sendMessage(text) {
+    if (!text || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+    appendChatTurn("user", text);
+    chatInput.value = "";
+    chatInput.disabled = true;
+    chatSendBtn.disabled = true;
+    quizTextInput.disabled = true;
+    quizTextSendBtn.disabled = true;
+    quizChoicesRow.querySelectorAll("button, input").forEach(function (el) { el.disabled = true; });
+    // A correct quiz answer is graded and spoken instantly (no LLM call);
+    // a wrong answer or free text goes through the LLM, which can take a
+    // few seconds -- without this, that wait looks identical to a stuck page.
+    thinkingEl.hidden = false;
+    state.ws.send(JSON.stringify({ type: "chat", text: text }));
+  }
+})();
+</script>
+</body>
+</html>

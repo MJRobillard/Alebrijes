@@ -1403,11 +1403,16 @@ def create_app(
     def listen() -> str:
         return _LISTEN_HTML_PATH.read_text(encoding="utf-8")
 
+    @app.get("/quiz", response_class=HTMLResponse)
+    def quiz() -> str:
+        return _QUIZ_HTML_PATH.read_text(encoding="utf-8")
+
     return app
 
 
 _FRONTEND_HTML_PATH = Path(__file__).parent / "frontend" / "index.html"
 _LISTEN_HTML_PATH = Path(__file__).parent / "frontend" / "listen.html"
+_QUIZ_HTML_PATH = Path(__file__).parent / "frontend" / "quiz.html"
 
 
 def run_server_blocking(host: str = "127.0.0.1", port: int | None = None) -> None:

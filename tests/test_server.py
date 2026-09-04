@@ -629,6 +629,13 @@ def test_listen_route_is_unauthenticated_static_shell() -> None:
     assert "text/html" in response.headers["content-type"]
 
 
+def test_quiz_route_is_unauthenticated_static_shell() -> None:
+    client = _client()
+    response = client.get("/quiz")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+
+
 # --- /api/rag/build ---------------------------------------------------------
 
 
