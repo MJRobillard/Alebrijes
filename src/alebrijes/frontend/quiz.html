@@ -78,6 +78,14 @@
     color: var(--ink);
   }
   audio { width: 100%; margin-top: 0.75rem; }
+  select {
+    font: inherit;
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--ink);
+  }
   .chat-turn { padding: 0.5rem 0.7rem; border-radius: 6px; margin-bottom: 0.5rem; font-size: 0.92rem; white-space: pre-wrap; }
   .chat-turn.user { background: var(--highlight-bg); }
   .chat-turn.narrator { background: var(--bg); border: 1px solid var(--line); }
@@ -162,6 +170,9 @@
       <button id="choose-cast-btn" hidden>Choose Cast…</button>
       <input type="text" id="cast-input" placeholder="/path/to/book.cast.yaml (optional)" style="flex: 1;">
     </div>
+    <div class="row mt-sm">
+      <select id="chat-model-select" title="Chat model used to grade wrong answers and free-text questions"></select>
+    </div>
     <div class="row mt-md">
       <button id="start-btn">Start</button>
       <span id="start-status" class="status"></span>
@@ -216,6 +227,25 @@
     return response;
   }
 
+  function populateModelSelect(selectEl) {
+    apiFetch("/api/llm/models").then(function (r) { return r.json(); }).then(function (result) {
+      selectEl.innerHTML = "";
+      const defaultOpt = document.createElement("option");
+      defaultOpt.value = "";
+      defaultOpt.textContent = "Default (" + result.default + ")";
+      selectEl.appendChild(defaultOpt);
+      (result.models || []).forEach(function (name) {
+        if (name === result.default) return; // already covered by the default option
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        selectEl.appendChild(opt);
+      });
+    }).catch(function () {
+      selectEl.innerHTML = '<option value="">Default</option>';
+    });
+  }
+
   function withPywebviewApi(callback) {
     if (window.pywebview && window.pywebview.api) return callback();
     window.addEventListener("pywebviewready", callback, { once: true });
@@ -250,9 +280,11 @@
   const scriptInput = document.getElementById("script-input");
   const quizInput = document.getElementById("quiz-input");
   const castInput = document.getElementById("cast-input");
+  const chatModelSelect = document.getElementById("chat-model-select");
   wireFilePicker("choose-script-btn", scriptInput, "pick_script_file");
   wireFilePicker("choose-quiz-btn", quizInput, "pick_quiz_file");
   wireFilePicker("choose-cast-btn", castInput, "pick_cast_file");
+  populateModelSelect(chatModelSelect);
 
   const startBtn = document.getElementById("start-btn");
   const startStatusEl = document.getElementById("start-status");
@@ -406,6 +438,7 @@
         cast: castInput.value.trim() || null,
         mode: "learning",
         quiz_path: quizPath,
+        chat_model: chatModelSelect.value || null,
         lookahead_chapters: 3,
       }),
     }).then(function (r) { return r.json(); }).then(function (result) {
