@@ -250,6 +250,107 @@ def test_synthesis_error_is_captured_not_raised_in_background_thread() -> None:
         renderer.stop()
 
 
+def test_start_chapter_index_skips_earlier_chapters() -> None:
+    received: list[ChapterAudio] = []
+    renderer = LookaheadRenderer(
+        _book(5),
+        CastFile(book_title="Fixture"),
+        voice_states={},
+        agent=_FakeAgent(),
+        start_chapter_index=2,
+        lookahead_chapters=5,
+        on_chapter_ready=received.append,
+        resolve_chapter_spans_fn=_fake_resolve,
+        synthesize_chapter_fn=_fake_synthesize,
+    )
+    try:
+        renderer.start()
+        assert _wait_until(lambda: len(received) == 3)  # chapters 2, 3, 4 -- not 0 or 1
+        assert [c.chapter_index for c in received] == [2, 3, 4]
+    finally:
+        renderer.stop()
+
+
+def test_start_chapter_index_lookahead_gate_is_relative_to_the_start() -> None:
+    # lookahead_chapters=1 starting at chapter 2 should render chapter 2
+    # immediately (not wait for chapters 0/1 to be "consumed", which never
+    # happens since they're never rendered) and then gate at chapter 3
+    # until mark_consumed(2).
+    renderer = LookaheadRenderer(
+        _book(5),
+        CastFile(book_title="Fixture"),
+        voice_states={},
+        agent=_FakeAgent(),
+        start_chapter_index=2,
+        lookahead_chapters=1,
+        resolve_chapter_spans_fn=_fake_resolve,
+        synthesize_chapter_fn=_fake_synthesize,
+    )
+    try:
+        renderer.start()
+        assert _wait_until(lambda: renderer.chapters_done == 1)
+        time.sleep(0.2)
+        assert renderer.chapters_done == 1  # gated, waiting on mark_consumed(2)
+
+        renderer.mark_consumed(2)
+        assert _wait_until(lambda: renderer.chapters_done == 2)
+    finally:
+        renderer.stop()
+
+
+def test_start_chapter_index_fast_start_splits_the_actual_start_chapter() -> None:
+    # The fast-start split should key off whichever chapter rendering
+    # actually begins at (start_chapter_index), not book.chapters[0] by
+    # identity -- starting mid-book must still get a quick first sound.
+    from alebrijes.session.buffer import FAST_START_HEAD_SPANS
+
+    received: list[ChapterAudio] = []
+    renderer = LookaheadRenderer(
+        _book(3),
+        CastFile(book_title="Fixture"),
+        voice_states={},
+        agent=_FakeAgent(),
+        start_chapter_index=1,
+        lookahead_chapters=5,
+        on_chapter_ready=received.append,
+        resolve_chapter_spans_fn=_fake_resolve_multi_span(FAST_START_HEAD_SPANS + 3),
+        synthesize_chapter_fn=_fake_synthesize,
+    )
+    try:
+        renderer.start()
+        assert _wait_until(lambda: len(received) >= 3)  # head + tail of ch1, then all of ch2
+        assert [c.chapter_index for c in received[:3]] == [1, 1, 2]
+    finally:
+        renderer.stop()
+
+
+def test_start_chapter_index_at_the_books_last_chapter_is_not_split() -> None:
+    # Same "no more chapters" sentinel concern as the single-chapter-book
+    # case, just triggered by starting at the last chapter instead of the
+    # book only having one.
+    from alebrijes.session.buffer import FAST_START_HEAD_SPANS
+
+    received: list[ChapterAudio] = []
+    renderer = LookaheadRenderer(
+        _book(3),
+        CastFile(book_title="Fixture"),
+        voice_states={},
+        agent=_FakeAgent(),
+        start_chapter_index=2,
+        lookahead_chapters=5,
+        on_chapter_ready=received.append,
+        resolve_chapter_spans_fn=_fake_resolve_multi_span(FAST_START_HEAD_SPANS + 3),
+        synthesize_chapter_fn=_fake_synthesize,
+    )
+    try:
+        renderer.start()
+        assert _wait_until(lambda: renderer.chapters_done == 1)
+        time.sleep(0.2)
+        assert len(received) == 1
+    finally:
+        renderer.stop()
+
+
 def test_synthesis_error_invokes_on_error_with_failing_chapter_index() -> None:
     def _raising_synthesize(voiced_spans, voice_states, agent, pause_ms=250, on_line_done=None):
         raise RuntimeError("synthesis exploded")

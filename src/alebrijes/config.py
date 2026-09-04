@@ -39,4 +39,9 @@ class Config:
     fillibusters_dir: Path = field(
         default_factory=lambda: Path(__file__).parent / "fillibusters"
     )
+    # Where /api/upload stages an uploaded script/quiz.yaml (each under its
+    # own uuid4 subdirectory, so two uploads with the same filename never
+    # collide) before /api/session/start_live reads it back by path like any
+    # other local file. Not committed/shared -- per-machine scratch space.
+    uploads_dir: Path = field(default_factory=lambda: Path.home() / ".local" / "share" / "alebrijes" / "uploads")
     max_workers: int | None = None  # None -> synth.parallel.recommended_worker_count picks one

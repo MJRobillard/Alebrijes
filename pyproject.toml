@@ -17,6 +17,7 @@ dependencies = [
   "spacy",
   "soundfile",  # pocket-tts needs this to read non-WAV audio (mp3/m4a/etc. voice clones)
   "fastapi",
+  "python-multipart",  # required by FastAPI for UploadFile/form-data parsing (/api/upload)
   "uvicorn[standard]",
   "pywebview",
   "imageio-ffmpeg",  # bundles a real static ffmpeg binary -- no system install needed

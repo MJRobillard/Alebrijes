@@ -671,6 +671,56 @@ def test_fillibusters_endpoint_empty_when_no_scripts_configured(tmp_path: Path) 
     assert response.json() == {"fillibusters": []}
 
 
+# --- /api/upload --------------------------------------------------------------
+
+
+def test_upload_stages_a_file_and_returns_a_readable_local_path(tmp_path: Path) -> None:
+    client = _client(uploads_dir=tmp_path / "uploads")
+
+    response = client.post(
+        "/api/upload",
+        headers=_headers(),
+        files={"file": ("book.script", b"NARRATOR: Hello there.\n", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    staged_path = Path(response.json()["path"])
+    assert staged_path.name == "book.script"
+    assert staged_path.read_bytes() == b"NARRATOR: Hello there.\n"
+    assert staged_path.is_relative_to(tmp_path / "uploads")
+
+
+def test_upload_stages_two_same_named_files_without_collision(tmp_path: Path) -> None:
+    client = _client(uploads_dir=tmp_path / "uploads")
+
+    first = client.post(
+        "/api/upload", headers=_headers(), files={"file": ("book.quiz.yaml", b"first", "text/plain")}
+    )
+    second = client.post(
+        "/api/upload", headers=_headers(), files={"file": ("book.quiz.yaml", b"second", "text/plain")}
+    )
+
+    first_path = Path(first.json()["path"])
+    second_path = Path(second.json()["path"])
+    assert first_path != second_path
+    assert first_path.read_bytes() == b"first"
+    assert second_path.read_bytes() == b"second"
+
+
+def test_upload_strips_directory_components_from_the_filename(tmp_path: Path) -> None:
+    client = _client(uploads_dir=tmp_path / "uploads")
+
+    response = client.post(
+        "/api/upload",
+        headers=_headers(),
+        files={"file": ("../../etc/passwd", b"not actually passwd", "text/plain")},
+    )
+
+    staged_path = Path(response.json()["path"])
+    assert staged_path.name == "passwd"
+    assert staged_path.is_relative_to(tmp_path / "uploads")
+
+
 # --- /api/rag/build ---------------------------------------------------------
 
 
@@ -1478,6 +1528,52 @@ def test_session_start_live_returns_session_id_and_spoken_true(tmp_path: Path) -
     body = response.json()
     assert body["spoken"] is True
     assert body["book_title"] == "Fixture"
+
+
+def test_session_start_live_rejects_out_of_range_start_chapter_index(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
+
+    client = _client(
+        ingest_book=lambda path: _fixture_book(),  # 2 chapters
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=_fake_chat_stream,
+        build_render_pipeline_fn=_fake_build_render_pipeline,
+    )
+    response = client.post(
+        "/api/session/start_live",
+        headers=_headers(),
+        json={"book": "unused.epub", "cast": str(cast_path), "start_chapter_index": 2},
+    )
+
+    assert response.status_code == 400
+
+
+def test_session_ws_live_start_chapter_index_skips_earlier_chapters(tmp_path: Path) -> None:
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture", entries=[CastEntry(character="Narrator", voice_state_path="alba")]), cast_path)
+
+    client = _client(
+        ingest_book=lambda path: _fixture_book(),  # 2 chapters, see _fixture_book()
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=_fake_chat_stream,
+        build_render_pipeline_fn=_fake_build_render_pipeline,
+    )
+    start = client.post(
+        "/api/session/start_live",
+        headers=_headers(),
+        json={"book": "unused.epub", "cast": str(cast_path), "start_chapter_index": 1, "lookahead_chapters": 5},
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        first = _receive_skipping_progress(ws)
+
+    # Only chapter 1 ("Two") ever renders/streams -- chapter 0 is skipped
+    # entirely, not just fast-forwarded past client-side.
+    assert first["type"] == "chapter_ready"
+    assert first["chapter_index"] == 1
+    assert first["title"] == "Two"
 
 
 def test_session_start_live_rejects_when_narrator_pipeline_fails(tmp_path: Path) -> None:

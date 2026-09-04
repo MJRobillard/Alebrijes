@@ -59,6 +59,7 @@ class LookaheadRenderer:
         voice_states: dict,
         agent: object,
         *,
+        start_chapter_index: int = 0,
         lookahead_chapters: int = DEFAULT_LOOKAHEAD_CHAPTERS,
         pause_ms: int = 250,
         on_chapter_ready: Optional[Callable[[ChapterAudio], None]] = None,
@@ -71,6 +72,7 @@ class LookaheadRenderer:
         self._cast_file = cast_file
         self._voice_states = voice_states
         self._agent = agent
+        self._start_chapter_index = start_chapter_index
         self._lookahead_chapters = lookahead_chapters
         self._pause_ms = pause_ms
         self._on_chapter_ready = on_chapter_ready
@@ -83,7 +85,13 @@ class LookaheadRenderer:
         self._resolve_chapter_spans = resolve_chapter_spans_fn
         self._synthesize_chapter = synthesize_chapter_fn
 
-        self._consumed_chapter = -1
+        # Chapters before start_chapter_index are never rendered/sent (see
+        # _run below) -- initializing "already consumed" up to just before
+        # the real starting point keeps the lookahead-window wait condition
+        # (chapter.index - self._consumed_chapter > lookahead_chapters)
+        # correct relative to where playback actually begins, instead of
+        # measuring distance from chapter 0.
+        self._consumed_chapter = start_chapter_index - 1
         self._chapters_done = 0
         self._error: Optional[Exception] = None
         self._cond = threading.Condition()
@@ -155,7 +163,8 @@ class LookaheadRenderer:
         return True
 
     def _run(self) -> None:
-        for chapter in self._book.chapters:
+        chapters_from_start = self._book.chapters[self._start_chapter_index :]
+        for chapter in chapters_from_start:
             with self._cond:
                 while (
                     not self._stop_event.is_set()
@@ -176,14 +185,17 @@ class LookaheadRenderer:
                     self._on_error(chapter.index, exc)
                 return
 
-            # Only the book's very first chapter gets the fast-start split
-            # (see FAST_START_HEAD_SPANS) -- and only when there's a later
-            # chapter to fall back on, since server.py's "no more chapters"
-            # sentinel fires off this chapter being the *last* one too; on
-            # a single-chapter book that would fire after just the head.
+            # Only the very first chapter actually being rendered (chapter
+            # start_chapter_index, not necessarily the book's chapter 0)
+            # gets the fast-start split (see FAST_START_HEAD_SPANS) -- and
+            # only when there's a later chapter in this render to fall back
+            # on, since server.py's "no more chapters" sentinel fires off
+            # this chapter being the book's *last* one too; starting at
+            # (or resuming into) that one chapter alone would otherwise
+            # fire the sentinel right after just the head.
             is_fast_start_chapter = (
-                chapter is self._book.chapters[0]
-                and len(self._book.chapters) > 1
+                chapter is chapters_from_start[0]
+                and len(chapters_from_start) > 1
                 and len(voiced_spans) > FAST_START_HEAD_SPANS
             )
             if is_fast_start_chapter:

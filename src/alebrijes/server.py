@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Callable, Iterator, Optional
 
 import numpy as np
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
@@ -121,6 +121,10 @@ class ChapterInfo(BaseModel):
 
 class BookChaptersResponse(BaseModel):
     chapters: list[ChapterInfo]
+
+
+class UploadResponse(BaseModel):
+    path: str  # staged local path -- feed back into `book`/`quiz_path`/etc. on later requests
 
 
 class CastEntryModel(BaseModel):
@@ -278,6 +282,7 @@ class SessionStartLiveRequest(BaseModel):
     cast: Optional[str] = None  # omit to build the cast from `book` on the fly
     mode: str = "qa"
     checkpoints: list[str] = []
+    start_chapter_index: int = 0  # 0-based; see /api/book/outline for the chapter list to pick from
     lookahead_chapters: int = 2
     chat_model: Optional[str] = None
     max_improv_exchanges: Optional[int] = None
@@ -436,6 +441,7 @@ def create_app(
     import_voice_fn: ImportVoiceFn = _default_import_voice,
     voices_dir: Optional[Path] = None,
     fillibusters_dir: Optional[Path] = None,
+    uploads_dir: Optional[Path] = None,
     embed_fn: Optional[EmbedFn] = None,
     chat_stream_fn: Optional[ChatStreamFn] = None,
     list_models_fn: Optional[Callable[[], list[str]]] = None,
@@ -446,6 +452,8 @@ def create_app(
         voices_dir = Config().voices_dir
     if fillibusters_dir is None:
         fillibusters_dir = Config().fillibusters_dir
+    if uploads_dir is None:
+        uploads_dir = Config().uploads_dir
     # Kept as a real OllamaClient (not just its bound .chat_stream method) so
     # session_ws can call .keep_warm() on the exact instance a live session's
     # chat calls actually go through -- stays None whenever a caller supplies
@@ -549,6 +557,25 @@ def create_app(
         except Exception as exc:  # noqa: BLE001 - reported to the client, not swallowed
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return Response(content=audio_bytes, media_type="audio/wav")
+
+    @app.post("/api/upload", response_model=UploadResponse, dependencies=[Depends(_verify_request)])
+    async def upload(file: UploadFile = File(...)) -> UploadResponse:
+        # Stages an uploaded script/quiz.yaml (or any other request-time
+        # file, e.g. a coffee-mode premise) under its own uuid4
+        # subdirectory of uploads_dir, so two uploads sharing a filename
+        # (e.g. two different books both named "book.script") never
+        # collide -- then just returns the staged local path, which every
+        # session-start request already accepts (payload.book/quiz_path/
+        # etc. are plain filesystem paths resolved server-side; there's no
+        # separate "uploaded file id" concept to thread through).
+        dest_dir = uploads_dir / uuid.uuid4().hex
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        # Path(...).name strips any directory components a hostile/odd
+        # filename might carry, so this can never write outside dest_dir.
+        dest_path = dest_dir / Path(file.filename or "upload").name
+        contents = await file.read()
+        dest_path.write_bytes(contents)
+        return UploadResponse(path=str(dest_path))
 
     @app.post("/api/book/chapters", response_model=BookChaptersResponse, dependencies=[Depends(_verify_request)])
     def book_chapters(payload: BookChaptersRequest) -> BookChaptersResponse:
@@ -884,6 +911,12 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not book.chapters:
             raise HTTPException(status_code=400, detail="Book has no chapters to render.")
+        if not (0 <= payload.start_chapter_index < len(book.chapters)):
+            raise HTTPException(
+                status_code=400,
+                detail=f"start_chapter_index {payload.start_chapter_index} is out of range "
+                f"for a book with {len(book.chapters)} chapters.",
+            )
 
         if payload.cast:
             try:
@@ -991,6 +1024,7 @@ def create_app(
             cast_file,
             voice_states,
             agent,
+            start_chapter_index=payload.start_chapter_index,
             lookahead_chapters=payload.lookahead_chapters,
             on_chapter_ready=on_chapter_ready,
             on_error=on_render_error,
