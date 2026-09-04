@@ -174,6 +174,8 @@
       <input type="text" id="chat-input" placeholder="Ask something…" style="flex: 1;">
       <button id="chat-send-btn">Send</button>
     </div>
+    <audio id="response-player" hidden></audio>
+    <audio id="filler-player" hidden></audio>
   </section>
 </main>
 
@@ -251,6 +253,66 @@
   const chatRow = document.getElementById("chat-row");
   const chatInput = document.getElementById("chat-input");
   const chatSendBtn = document.getElementById("chat-send-btn");
+
+  // A small sequential-playback queue -- used for the graded reaction's own
+  // audio (responseAudioPlayer) and, separately, filler audio
+  // (fillerAudioPlayer), each against its own <audio> element.
+  function makeAudioQueuePlayer(playerEl, onIdle) {
+    const queue = [];
+    let playing = false;
+
+    function playNext() {
+      const next = queue.shift();
+      if (next === undefined) {
+        playing = false;
+        if (onIdle) onIdle();
+        return;
+      }
+      playing = true;
+      playerEl.src = "data:audio/wav;base64," + next;
+      playerEl.play();
+    }
+
+    playerEl.addEventListener("ended", playNext);
+
+    return {
+      push: function (base64Wav) {
+        queue.push(base64Wav);
+        if (!playing) playNext();
+      },
+      isIdle: function () {
+        return !playing && queue.length === 0;
+      },
+      // Interrupts immediately -- clears anything queued and stops what's
+      // playing, without firing onIdle. Used by fillerAudioPlayer to cut
+      // cleanly the instant real content is ready, instead of draining to
+      // its own natural end first.
+      stop: function () {
+        queue.length = 0;
+        playing = false;
+        playerEl.pause();
+      },
+    };
+  }
+
+  // Set once the final "answer"/"awaiting_input" message for the current
+  // response has arrived but its queued audio (responseAudioPlayer) is
+  // still playing -- main narration (player) only resumes once *both* are
+  // true, checked in the "answer"/"awaiting_input" handlers and in this
+  // onIdle callback (whichever happens second).
+  let responseAudioPending = false;
+  const responseAudioPlayer = makeAudioQueuePlayer(document.getElementById("response-player"), function () {
+    if (responseAudioPending) {
+      responseAudioPending = false;
+      if (player.paused) player.play();
+    }
+  });
+  // Plays pre-rendered filler audio (server's "filler_audio_chunk"
+  // messages) while a wrong-answer/chat reply is in flight -- a separate
+  // player/queue from responseAudioPlayer so it can be cut immediately
+  // (see stop(), above) the moment real content is ready, without
+  // disturbing responseAudioPlayer's own narration-resume tracking.
+  const fillerAudioPlayer = makeAudioQueuePlayer(document.getElementById("filler-player"), null);
 
   const state = {
     ws: null,
@@ -345,6 +407,7 @@
           message.lines_done + " / " + message.lines_total;
       } else if (message.type === "awaiting_input") {
         thinkingEl.hidden = true;
+        fillerAudioPlayer.stop();
         player.pause();
         appendChatTurn("narrator", message.text);
         if (message.choices) {
@@ -357,19 +420,48 @@
         }
       } else if (message.type === "answer") {
         thinkingEl.hidden = true;
+        fillerAudioPlayer.stop();
         appendChatTurn("narrator", message.text);
         hideQuizPanel();
         chatInput.disabled = false;
         chatSendBtn.disabled = false;
         refreshScore();
-        if (player.paused) player.play();
+        // A wrong answer's LLM reaction streams as audio_chunk(s) *before*
+        // this "answer" message -- resume main narration only once that
+        // queued audio has actually finished playing, not the instant this
+        // arrives, so narration doesn't talk over the tail of the reaction.
+        // A correct answer's praise is spoken the same way (see
+        // handle_user_message), so this applies either way.
+        if (responseAudioPlayer.isIdle()) {
+          if (player.paused) player.play();
+        } else {
+          responseAudioPending = true;
+        }
       } else if (message.type === "audio_chunk") {
+        // The first chunk of a live reply is the earliest signal the wait
+        // is over -- hide "Thinking..."/cut filler here, not just on the
+        // final answer/awaiting_input, so it disappears the moment audio
+        // starts rather than sitting through the whole response.
         thinkingEl.hidden = true;
+        fillerAudioPlayer.stop();
         if (message.text) appendChatTurn("live", message.character + ": " + message.text);
+        responseAudioPlayer.push(message.data);
+      } else if (message.type === "filler_audio_chunk") {
+        fillerAudioPlayer.push(message.data);
       } else if (message.type === "error") {
         thinkingEl.hidden = true;
+        fillerAudioPlayer.stop();
         appendChatTurn("narrator", "Error: " + message.detail);
-        hideQuizPanel();
+        // Don't hideQuizPanel() -- a pending quiz question is still
+        // pending; losing the choices/panel here would strand the
+        // listener with no way to answer except retyping from scratch.
+        // Just re-enable whichever input is actually showing so they can
+        // retry.
+        if (!quizPanel.hidden) {
+          quizChoicesRow.querySelectorAll("button, input").forEach(function (el) { el.disabled = false; });
+          quizTextInput.disabled = false;
+          quizTextSendBtn.disabled = false;
+        }
         chatInput.disabled = false;
         chatSendBtn.disabled = false;
         renderProgressEl.hidden = true;
