@@ -1434,6 +1434,10 @@ def run_server_blocking(host: str = "127.0.0.1", port: int | None = None) -> Non
     """
     import uvicorn
 
+    from alebrijes.logging_config import configure_logging
+
+    configure_logging()
+
     token = generate_token()
     resolved_port = port if port is not None else find_free_port(host)
     app = create_app(token, allowed_origin=f"http://{host}:{resolved_port}")

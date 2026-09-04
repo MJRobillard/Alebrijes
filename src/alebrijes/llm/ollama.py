@@ -31,6 +31,13 @@ DEFAULT_BASE_URL = "http://localhost:11434"
 DEFAULT_CHAT_MODEL = os.environ.get("ALEBRIJES_CHAT_MODEL", "hermes3:8b")
 DEFAULT_EMBED_MODEL = os.environ.get("ALEBRIJES_EMBED_MODEL", "nomic-embed-text")
 
+# `/api/tags`'s `details.family` values for embedding-only models -- these
+# can't produce a chat completion, so list_models() excludes them from a
+# chat-model picker. An unrecognized family is *kept*, not filtered, so a
+# real chat model never silently disappears just because its family name
+# isn't in this list yet (see list_models's docstring).
+_EMBEDDING_MODEL_FAMILIES = {"nomic-bert", "bert"}
+
 # Connect fast-fails (Ollama not running should surface as a clear error in
 # a few seconds, not hang); reads get up to 60s per chunk -- generous enough
 # for CPU-only local inference without leaving a hung request unbounded.
@@ -178,9 +185,16 @@ class OllamaClient:
         return np.asarray(data["embedding"], dtype=np.float32)
 
     def list_models(self) -> list[str]:
-        """Names of models already pulled locally (`ollama list`'s data),
-        for populating a model picker -- not every name is a chat model
-        (embedding models show up too), so callers filter as needed."""
+        """Names of locally pulled *chat-capable* models, for populating a
+        model picker. `/api/tags` also lists embedding-only models (e.g.
+        nomic-embed-text) -- those can't produce a chat completion at all,
+        so they're filtered out here by family rather than left for every
+        caller to filter themselves (nothing ever did; a picker showing an
+        embedding model as a "chat model" choice is just a bug). A family
+        this doesn't recognize is *included*, not hidden -- better to show
+        an extra option than to silently drop a real chat model because its
+        family name isn't in this list yet.
+        """
         try:
             response = self._client.get(f"{self._base_url}/api/tags")
             response.raise_for_status()
@@ -188,4 +202,8 @@ class OllamaClient:
             raise OllamaUnavailable(f"Could not reach Ollama at {self._base_url}: {exc}") from exc
 
         data = response.json()
-        return [entry["name"] for entry in data.get("models", [])]
+        return [
+            entry["name"]
+            for entry in data.get("models", [])
+            if entry.get("details", {}).get("family") not in _EMBEDDING_MODEL_FAMILIES
+        ]

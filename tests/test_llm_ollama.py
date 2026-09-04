@@ -81,13 +81,45 @@ def test_list_models_returns_model_names() -> None:
         assert request.url.path == "/api/tags"
         return httpx.Response(
             200,
-            json={"models": [{"name": "hermes3:8b"}, {"name": "nomic-embed-text:latest"}]},
+            json={"models": [{"name": "hermes3:8b", "details": {"family": "llama"}}]},
         )
 
     client = _client_with_transport(handler)
     names = client.list_models()
 
-    assert names == ["hermes3:8b", "nomic-embed-text:latest"]
+    assert names == ["hermes3:8b"]
+
+
+def test_list_models_filters_out_embedding_only_models() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {"name": "hermes3:8b", "details": {"family": "llama"}},
+                    {"name": "nomic-embed-text:latest", "details": {"family": "nomic-bert"}},
+                    {"name": "some-bert-embedder:latest", "details": {"family": "bert"}},
+                ]
+            },
+        )
+
+    client = _client_with_transport(handler)
+    names = client.list_models()
+
+    assert names == ["hermes3:8b"]
+
+
+def test_list_models_keeps_an_unrecognized_family_rather_than_hiding_it() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"models": [{"name": "some-new-model:latest", "details": {"family": "some-new-family"}}]},
+        )
+
+    client = _client_with_transport(handler)
+    names = client.list_models()
+
+    assert names == ["some-new-model:latest"]
 
 
 def test_list_models_raises_ollama_unavailable_on_connection_error() -> None:

@@ -69,6 +69,13 @@ def build_launch_url(host: str, port: int, token: str) -> str:
 
 
 def main() -> None:
+    # Before anything else logs -- see logging_config.py's docstring for
+    # why this is needed at all (uvicorn's own log_level= below doesn't
+    # configure this package's loggers).
+    from alebrijes.logging_config import configure_logging
+
+    configure_logging()
+
     # Must happen before anything imports huggingface_hub (transitively,
     # before anything imports pocket_tts) -- see hf_bundle.py's docstring.
     from alebrijes.hf_bundle import configure_bundled_hf_cache
