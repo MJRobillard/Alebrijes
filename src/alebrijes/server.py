@@ -54,7 +54,7 @@ from alebrijes.llm.scripter import MODEL_NAME as SCRIPTER_MODEL_NAME
 from alebrijes.preview import synthesize_preview as default_synthesize_preview
 from alebrijes.render import NARRATOR, render_book as default_render_book
 from alebrijes.session import DEFAULT_MAX_IMPROV_EXCHANGES, InteractiveSession, SessionMode
-from alebrijes.session.fillibuster import next_fillibuster
+from alebrijes.session.fillibuster import list_fillibuster_queue, next_fillibuster
 from alebrijes.synth.streaming import SentenceChunker
 from alebrijes.transcript import Transcript, load as load_transcript
 
@@ -475,6 +475,14 @@ def create_app(
         except OllamaUnavailable as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return {"models": [SCRIPTER_MODEL_NAME, *names], "default": DEFAULT_CHAT_MODEL}
+
+    @app.get("/api/fillibusters", dependencies=[Depends(_verify_request)])
+    def fillibusters() -> dict:
+        # A peek (list_fillibuster_queue never pops/rotates), so polling
+        # this to refresh a "what's queued" display doesn't itself disturb
+        # the queue -- only next_fillibuster (used inside _filler_loop)
+        # actually consumes/rotates it.
+        return {"queue": list_fillibuster_queue(fillibusters_dir)}
 
     @app.get("/api/voices", response_model=VoicesResponse, dependencies=[Depends(_verify_request)])
     def voices() -> VoicesResponse:

@@ -636,6 +636,27 @@ def test_quiz_route_is_unauthenticated_static_shell() -> None:
     assert "text/html" in response.headers["content-type"]
 
 
+def test_fillibusters_endpoint_lists_queue_in_pop_order(tmp_path: Path) -> None:
+    fillibusters_dir = tmp_path / "fillibusters"
+    fillibusters_dir.mkdir()
+    _write_wav_fixture(fillibusters_dir / "a.wav", value=1)
+    _write_wav_fixture(fillibusters_dir / "b.wav", value=2)
+
+    client = _client(fillibusters_dir=fillibusters_dir)
+    response = client.get("/api/fillibusters", headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json() == {"queue": ["a.wav", "b.wav"]}
+
+
+def test_fillibusters_endpoint_empty_when_no_clips_configured(tmp_path: Path) -> None:
+    client = _client(fillibusters_dir=tmp_path / "does-not-exist")
+    response = client.get("/api/fillibusters", headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json() == {"queue": []}
+
+
 # --- /api/rag/build ---------------------------------------------------------
 
 

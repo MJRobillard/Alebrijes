@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from alebrijes.session.fillibuster import next_fillibuster
+from alebrijes.session.fillibuster import list_fillibuster_queue, next_fillibuster
 
 
 def _write_wav(path: Path, sample_rate: int, value: int, mtime: float) -> None:
@@ -71,3 +71,21 @@ def test_repeated_pops_never_return_the_same_file_twice_in_a_row(tmp_path: Path)
 
     for previous, current in zip(seen, seen[1:]):
         assert previous != current
+
+
+def test_list_fillibuster_queue_returns_empty_for_missing_or_empty_directory(tmp_path: Path) -> None:
+    assert list_fillibuster_queue(tmp_path / "does_not_exist") == []
+    assert list_fillibuster_queue(tmp_path) == []
+
+
+def test_list_fillibuster_queue_matches_pop_order_without_consuming(tmp_path: Path) -> None:
+    _write_wav(tmp_path / "a.wav", 16000, value=1, mtime=100)
+    _write_wav(tmp_path / "b.wav", 16000, value=2, mtime=200)
+
+    assert list_fillibuster_queue(tmp_path) == ["a.wav", "b.wav"]
+    # A peek, not a pop -- calling it doesn't rotate anything.
+    assert list_fillibuster_queue(tmp_path) == ["a.wav", "b.wav"]
+
+    popped = next_fillibuster(tmp_path)
+    assert popped.path.name == "a.wav"
+    assert list_fillibuster_queue(tmp_path) == ["b.wav", "a.wav"]

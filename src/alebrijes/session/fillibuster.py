@@ -69,3 +69,14 @@ def next_fillibuster(directory: Path) -> Optional[Fillibuster]:
     os.utime(chosen, (bumped, bumped))
 
     return Fillibuster(audio=np.asarray(audio), sample_rate=sample_rate, path=chosen)
+
+
+def list_fillibuster_queue(directory: Path) -> list[str]:
+    """Filenames in the order `next_fillibuster` would return them, without
+    popping/rotating anything -- for a "what's queued" display (e.g. the
+    quiz page's queue-state indicator). `[]` if the directory doesn't exist
+    or holds no .wav files, same "not an error" contract as
+    `next_fillibuster`."""
+    if not directory.exists():
+        return []
+    return [p.name for p in _ordered_wav_files(directory)]
