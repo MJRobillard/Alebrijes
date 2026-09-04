@@ -132,39 +132,6 @@
     font-size: 0.85rem;
     margin-bottom: 1.25rem;
   }
-  .mt-sm { margin-top: 0.4rem; }
-  .mt-md { margin-top: 0.75rem; }
-  .section-divider {
-    border-top: 1px solid var(--line);
-    margin-top: 1.1rem;
-    padding-top: 1.1rem;
-  }
-  .pulse-dot {
-    position: relative;
-    display: inline-block;
-    width: 0.65rem;
-    height: 0.65rem;
-    border-radius: 50%;
-    padding: 0;
-    background: var(--ink-soft);
-    border: none;
-    cursor: pointer;
-    vertical-align: middle;
-  }
-  .pulse-dot.off { opacity: 0.5; }
-  .pulse-dot.on { background: var(--accent); }
-  .pulse-dot.on::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: 50%;
-    background: var(--accent);
-    animation: pulse-dot-ping 1.6s ease-out infinite;
-  }
-  @keyframes pulse-dot-ping {
-    0% { transform: scale(1); opacity: 0.6; }
-    100% { transform: scale(2.2); opacity: 0; }
-  }
 </style>
 </head>
 <body>
@@ -187,7 +154,7 @@
       <button id="choose-audio-btn">Choose Audiobook (.m4b)…</button>
       <span id="audio-path" class="path">No audiobook selected.</span>
     </div>
-    <div class="row mt-sm" id="audio-path-row">
+    <div class="row" id="audio-path-row" style="margin-top: 0.4rem;">
       <input type="text" id="audio-path-input" placeholder="/path/to/book.m4b" style="flex: 1;">
       <button id="audio-path-load-btn">Load</button>
     </div>
@@ -195,7 +162,7 @@
       <button id="choose-cast-btn">Choose Cast File (.cast.yaml)…</button>
       <span id="cast-path" class="path">No cast file selected.</span>
     </div>
-    <div class="row mt-sm" id="cast-path-row">
+    <div class="row" id="cast-path-row" style="margin-top: 0.4rem;">
       <input type="text" id="cast-path-input" placeholder="/path/to/book.cast.yaml" style="flex: 1;">
       <button id="cast-path-load-btn">Set</button>
     </div>
@@ -235,19 +202,19 @@
       <button id="lesson-choose-script-btn" hidden>Choose Script…</button>
       <input type="text" id="lesson-script-input" placeholder="/path/to/script.script" style="flex: 1;">
     </div>
-    <div class="row mt-sm">
+    <div class="row" style="margin-top: 0.4rem;">
       <button id="lesson-choose-cast-btn" hidden>Choose Cast…</button>
       <input type="text" id="lesson-cast-input" placeholder="/path/to/book.cast.yaml (optional — built from the script if omitted)" style="flex: 1;">
     </div>
-    <div class="row mt-sm" id="lesson-quiz-input-row" hidden>
+    <div class="row" id="lesson-quiz-input-row" style="margin-top: 0.4rem;" hidden>
       <button id="lesson-choose-quiz-btn" hidden>Choose Quiz…</button>
       <input type="text" id="lesson-quiz-input" placeholder="/path/to/book.quiz.yaml" style="flex: 1;">
     </div>
-    <div class="row mt-sm" id="lesson-coffee-input-row" hidden>
+    <div class="row" id="lesson-coffee-input-row" style="margin-top: 0.4rem;" hidden>
       <button id="lesson-choose-coffee-btn" hidden>Choose Coffee Premise…</button>
       <input type="text" id="lesson-coffee-input" placeholder="/path/to/book.coffee.md (optional)" style="flex: 1;">
     </div>
-    <div class="row mt-sm" id="lesson-mode-row" hidden>
+    <div class="row" id="lesson-mode-row" style="margin-top: 0.4rem;" hidden>
       <select id="lesson-mode-select">
         <option value="learning">Learning (lesson + interrogation)</option>
         <option value="cyoa">Coffee (side-quest break)</option>
@@ -263,16 +230,14 @@
       </span>
       <button id="start-lesson-btn">Start Lesson</button>
       <span id="lesson-status" class="status"></span>
-      <button id="lesson-keep-warm-dot" class="pulse-dot" type="button" hidden title="Local model keep-warm (click to toggle)"></button>
     </div>
     <div id="lesson-score" class="status" hidden style="margin-top: 0.5rem; font-weight: 600;"></div>
     <div id="lesson-render-progress" class="status" hidden style="margin-top: 0.5rem;"></div>
-    <div id="lesson-book-title" class="section-divider" style="font-weight: 600;"></div>
+    <div id="lesson-book-title" style="font-weight: 600; margin-top: 0.75rem;"></div>
     <audio id="lesson-player" controls hidden style="margin-top: 0.5rem;"></audio>
     <div id="lesson-transcript"></div>
-    <div id="lesson-chat-log" class="mt-md" style="max-height: 30vh; overflow-y: auto;" hidden></div>
-    <div id="lesson-thinking" class="status mt-sm" hidden style="font-style: italic;">Thinking…</div>
-    <audio id="lesson-filler-player" hidden></audio>
+    <div id="lesson-chat-log" style="margin-top: 0.75rem; max-height: 30vh; overflow-y: auto;" hidden></div>
+    <div id="lesson-thinking" class="status" hidden style="margin-top: 0.4rem; font-style: italic;">Thinking…</div>
     <div id="lesson-quiz-panel" hidden style="margin-top: 0.75rem; border: 1px solid var(--line); border-radius: 6px; padding: 0.75rem;">
       <div id="lesson-quiz-prompt" style="font-weight: 600; margin-bottom: 0.6rem;"></div>
       <div class="row" id="lesson-quiz-choices-row" style="margin-bottom: 0.6rem;"></div>
@@ -281,7 +246,7 @@
         <button id="lesson-quiz-text-send-btn">Send</button>
       </div>
     </div>
-    <div class="row mt-md" id="lesson-chat-row" hidden>
+    <div class="row" id="lesson-chat-row" hidden style="margin-top: 0.75rem;">
       <input type="text" id="lesson-chat-input" placeholder="Type your answer or question…" style="flex: 1;">
       <button id="lesson-chat-send-btn">Send</button>
     </div>
@@ -299,7 +264,7 @@
       <button id="build-rag-btn">Build Knowledge Index</button>
       <span id="rag-status" class="status"></span>
     </div>
-    <div class="row mt-md" id="session-start-row" hidden>
+    <div class="row" id="session-start-row" hidden style="margin-top: 0.75rem;">
       <select id="mode-select">
         <option value="qa">Ask questions</option>
         <option value="cyoa">Choose your own adventure</option>
@@ -313,16 +278,13 @@
       </span>
       <button id="start-session-btn">Start Session</button>
       <span id="session-status" class="status"></span>
-      <button id="keep-warm-dot" class="pulse-dot" type="button" hidden title="Local model keep-warm (click to toggle)"></button>
     </div>
-    <div id="chat-log" class="mt-md" style="max-height: 30vh; overflow-y: auto;" hidden></div>
-    <div id="session-thinking" class="status mt-sm" hidden style="font-style: italic;">Thinking…</div>
-    <div class="row mt-md" id="chat-row" hidden>
+    <div id="chat-log" style="margin-top: 0.75rem; max-height: 30vh; overflow-y: auto;" hidden></div>
+    <div class="row" id="chat-row" hidden style="margin-top: 0.75rem;">
       <input type="text" id="chat-input" placeholder="Who is that character again?" style="flex: 1;">
       <button id="chat-send-btn">Send</button>
     </div>
     <audio id="response-player" hidden></audio>
-    <audio id="filler-player" hidden></audio>
   </section>
 </main>
 
@@ -517,8 +479,6 @@
   const chatInput = document.getElementById("chat-input");
   const chatSendBtn = document.getElementById("chat-send-btn");
   const responsePlayer = document.getElementById("response-player");
-  const sessionThinkingEl = document.getElementById("session-thinking");
-  const keepWarmDotEl = document.getElementById("keep-warm-dot");
 
   function resetSessionSection() {
     sessionSection.removeAttribute("disabled");
@@ -645,16 +605,6 @@
       isIdle: function () {
         return !playing && queue.length === 0;
       },
-      // Interrupts immediately -- clears anything queued and stops whatever's
-      // currently playing, without firing onIdle (that's for a natural
-      // drain-to-empty, not an interruption). Used by the filler-audio
-      // players below to cut cleanly the instant real content is ready,
-      // rather than letting a filler clip play out to its own end first.
-      stop: function () {
-        queue.length = 0;
-        playing = false;
-        playerEl.pause();
-      },
     };
   }
 
@@ -669,44 +619,6 @@
       sessionResponseAudioPending = false;
       if (player.paused) player.play();
     }
-  });
-  // Plays pre-rendered filler audio (server's "filler_audio_chunk" messages)
-  // while a wrong-answer/chat reply is in flight -- a separate player/queue
-  // from responseAudioPlayer (not the real response) so it can be cut
-  // immediately (see stop(), above) the moment real content is ready,
-  // without disturbing responseAudioPlayer's own narration-resume tracking.
-  const fillerAudioPlayer = makeAudioQueuePlayer(document.getElementById("filler-player"), null);
-
-  // Shared by both the plain session and lesson views: a small clickable
-  // dot reflecting the server's keep_warm_state messages, and sending
-  // keep_warm_toggle on click. `getWs` is a thunk (not a fixed reference)
-  // since each view's websocket is replaced on every new session.
-  function wireKeepWarmDot(dotEl, getWs) {
-    let enabled = false;
-    dotEl.addEventListener("click", function () {
-      const ws = getWs();
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({ type: "keep_warm_toggle", enabled: !enabled }));
-    });
-    return {
-      applyState: function (message) {
-        dotEl.hidden = !message.available;
-        enabled = !!message.enabled;
-        dotEl.classList.toggle("on", enabled);
-        dotEl.classList.toggle("off", !enabled);
-      },
-      // Called when opening a fresh session, so a previous session's dot
-      // state doesn't linger on screen before the new session's own
-      // keep_warm_state (if any) arrives.
-      reset: function () {
-        dotEl.hidden = true;
-        enabled = false;
-        dotEl.classList.remove("on", "off");
-      },
-    };
-  }
-  const sessionKeepWarmDot = wireKeepWarmDot(keepWarmDotEl, function () {
-    return state.session && state.session.ws;
   });
 
   startSessionBtn.addEventListener("click", function () {
@@ -752,13 +664,10 @@
     );
     state.session = { ws: ws, id: sessionId, spoken: spoken };
     sessionResponseAudioPending = false;
-    sessionKeepWarmDot.reset();
 
     ws.addEventListener("message", function (evt) {
       const message = JSON.parse(evt.data);
       if (message.type === "answer") {
-        sessionThinkingEl.hidden = true;
-        fillerAudioPlayer.stop();
         appendChatTurn("narrator", message.text);
         chatInput.disabled = false;
         chatSendBtn.disabled = false;
@@ -777,30 +686,15 @@
           sessionResponseAudioPending = true;
         }
       } else if (message.type === "awaiting_input") {
-        sessionThinkingEl.hidden = true;
-        fillerAudioPlayer.stop();
         player.pause();
         appendChatTurn("narrator", message.text);
         chatInput.disabled = false;
         chatSendBtn.disabled = false;
         chatInput.focus();
       } else if (message.type === "audio_chunk") {
-        // The first chunk of a live LLM response is the earliest signal
-        // that the wait is over -- hide "Thinking..."/cut filler here, not
-        // just on the final answer/awaiting_input, so it disappears the
-        // moment audio starts rather than sitting through the whole
-        // (possibly multi-sentence) response.
-        sessionThinkingEl.hidden = true;
-        fillerAudioPlayer.stop();
         if (message.text) appendChatTurn("live", message.character + ": " + message.text);
         responseAudioPlayer.push(message.data);
-      } else if (message.type === "filler_audio_chunk") {
-        fillerAudioPlayer.push(message.data);
-      } else if (message.type === "keep_warm_state") {
-        sessionKeepWarmDot.applyState(message);
       } else if (message.type === "error") {
-        sessionThinkingEl.hidden = true;
-        fillerAudioPlayer.stop();
         appendChatTurn("narrator", "Error: " + message.detail);
         chatInput.disabled = false;
         chatSendBtn.disabled = false;
@@ -827,11 +721,6 @@
     chatInput.value = "";
     chatInput.disabled = true;
     chatSendBtn.disabled = true;
-    // A correct quiz answer (checkpoint/learning mode) is graded and spoken
-    // instantly, no LLM call -- a wrong answer or any free text does go
-    // through the LLM, which can take a few seconds. Without this, that
-    // wait looks identical to the page being stuck.
-    sessionThinkingEl.hidden = false;
     state.session.ws.send(JSON.stringify({ type: "chat", text: text }));
   }
 
@@ -926,7 +815,6 @@
   const lessonChatRow = document.getElementById("lesson-chat-row");
   const lessonChatInput = document.getElementById("lesson-chat-input");
   const lessonChatSendBtn = document.getElementById("lesson-chat-send-btn");
-  const lessonKeepWarmDotEl = document.getElementById("lesson-keep-warm-dot");
   // Same pairing as sessionResponseAudioPending/responseAudioPlayer above --
   // resume main narration (lessonPlayer) only once both the final message
   // for this response has arrived *and* its queued audio has finished
@@ -938,9 +826,6 @@
       if (lessonPlayer.paused) lessonPlayer.play();
     }
   });
-  // Same "separate queue, cut on real content" shape as fillerAudioPlayer
-  // above, against the lesson view's own <audio> element.
-  const lessonFillerPlayer = makeAudioQueuePlayer(document.getElementById("lesson-filler-player"), null);
 
   const lessonState = {
     ws: null,
@@ -951,9 +836,6 @@
     currentChapterSpans: [],
     currentSpanId: null,
   };
-  const lessonKeepWarmDot = wireKeepWarmDot(lessonKeepWarmDotEl, function () {
-    return lessonState.ws;
-  });
 
   populateModelSelect(lessonChatModelSelect);
 
@@ -1066,7 +948,6 @@
       wsProtocol + "//" + window.location.host + "/api/session/" + sessionId + "/ws?token=" + encodeURIComponent(token)
     );
     lessonState.ws = ws;
-    lessonKeepWarmDot.reset();
 
     ws.addEventListener("message", function (evt) {
       const message = JSON.parse(evt.data);
@@ -1082,7 +963,6 @@
           message.lines_done + " / " + message.lines_total;
       } else if (message.type === "awaiting_input") {
         lessonThinkingEl.hidden = true;
-        lessonFillerPlayer.stop();
         lessonPlayer.pause();
         appendChatTurnTo(lessonChatLog, "narrator", message.text);
         if (message.choices) {
@@ -1095,7 +975,6 @@
         }
       } else if (message.type === "answer") {
         lessonThinkingEl.hidden = true;
-        lessonFillerPlayer.stop();
         appendChatTurnTo(lessonChatLog, "narrator", message.text);
         hideLessonQuizPanel();
         lessonChatInput.disabled = false;
@@ -1117,21 +996,14 @@
       } else if (message.type === "audio_chunk") {
         // The first chunk of a live LLM response is the earliest signal
         // that the wait is over and something is actually coming back --
-        // hide "Thinking…"/cut filler here, not just on the final
-        // answer/awaiting_input, so it disappears the moment audio starts
-        // rather than sitting there through the whole (possibly
-        // multi-sentence) response.
+        // hide "Thinking…" here, not just on the final answer/awaiting_input,
+        // so it disappears the moment audio starts rather than sitting
+        // there through the whole (possibly multi-sentence) response.
         lessonThinkingEl.hidden = true;
-        lessonFillerPlayer.stop();
         if (message.text) appendChatTurnTo(lessonChatLog, "live", message.character + ": " + message.text);
         lessonResponsePlayer.push(message.data);
-      } else if (message.type === "filler_audio_chunk") {
-        lessonFillerPlayer.push(message.data);
-      } else if (message.type === "keep_warm_state") {
-        lessonKeepWarmDot.applyState(message);
       } else if (message.type === "error") {
         lessonThinkingEl.hidden = true;
-        lessonFillerPlayer.stop();
         appendChatTurnTo(lessonChatLog, "narrator", "Error: " + message.detail);
         hideLessonQuizPanel();
         lessonChatInput.disabled = false;
