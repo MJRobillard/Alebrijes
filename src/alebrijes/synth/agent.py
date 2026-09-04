@@ -302,25 +302,38 @@ class TTSAgent:
             return audio
         return audio.numpy()
 
+    def stream_chunks(self, text: str) -> Iterator[np.ndarray]:
+        """Yields each raw audio chunk as pocket_tts decodes it, instead of
+        buffering the whole utterance before returning anything.
+
+        pocket_tts generates text sentence-by-sentence internally and yields
+        each chunk of decoded audio as soon as it's ready
+        (`generate_audio_stream`); `generate_audio`/`synthesize` just buffer
+        all of those chunks before returning. A caller that can play/send
+        audio incrementally (e.g. server.py's live-session sentence
+        synthesis) gets a much lower time-to-first-sound this way than
+        waiting for a whole sentence's audio at once -- `synthesize_streaming`
+        below is for a caller that only wants progress reporting but still
+        needs the concatenated result.
+        """
+        if not self._voice_cache:
+            raise RuntimeError("Voice state is not initialized")
+        for chunk in self._model.generate_audio_stream(self._voice_cache.state, text):
+            yield chunk.numpy() if not isinstance(chunk, np.ndarray) else chunk
+
     def synthesize_streaming(
         self, text: str, on_progress: Optional[Callable[[float], None]] = None
     ) -> np.ndarray:
         """Like `synthesize`, but calls `on_progress(audio_seconds_generated_so_far)`
         after every audio chunk pocket_tts decodes.
 
-        pocket_tts generates text sentence-by-sentence internally and yields each
-        chunk of decoded audio as soon as it's ready (`generate_audio_stream`);
-        `generate_audio`/`synthesize` just buffer all of those chunks before
-        returning. Consuming the stream ourselves gives callers a real,
-        continuously-updating measure of progress through a single long job
-        instead of only an all-or-nothing "done" signal.
+        Consuming `stream_chunks` ourselves and concatenating gives callers a
+        real, continuously-updating measure of progress through a single long
+        job instead of only an all-or-nothing "done" signal.
         """
-        if not self._voice_cache:
-            raise RuntimeError("Voice state is not initialized")
         chunks: list[np.ndarray] = []
         total_samples = 0
-        for chunk in self._model.generate_audio_stream(self._voice_cache.state, text):
-            chunk_array = chunk.numpy() if not isinstance(chunk, np.ndarray) else chunk
+        for chunk_array in self.stream_chunks(text):
             chunks.append(chunk_array)
             total_samples += chunk_array.shape[-1]
             if on_progress is not None:

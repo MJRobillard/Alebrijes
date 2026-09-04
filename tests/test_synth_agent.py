@@ -132,6 +132,46 @@ def test_agent_init_uses_provided_voice_state_without_recomputing() -> None:
     assert calls == []
 
 
+def test_agent_stream_chunks_yields_each_chunk_before_concatenating() -> None:
+    class FakeModel:
+        sample_rate = 24000
+
+        def get_state_for_audio_prompt(self, conditioning: object) -> object:
+            return {"conditioning": conditioning}
+
+        def generate_audio_stream(self, state: object, text: str):
+            yield np.ones(3, dtype=np.float32)
+            yield np.ones(2, dtype=np.float32) * 2
+
+    agent = TTSAgent(voice="alba", model=FakeModel())
+
+    chunks = list(agent.stream_chunks("hello"))
+
+    assert len(chunks) == 2
+    assert chunks[0].tolist() == [1.0, 1.0, 1.0]
+    assert chunks[1].tolist() == [2.0, 2.0]
+
+
+def test_synthesize_streaming_concatenates_stream_chunks_and_reports_progress() -> None:
+    class FakeModel:
+        sample_rate = 2
+
+        def get_state_for_audio_prompt(self, conditioning: object) -> object:
+            return {"conditioning": conditioning}
+
+        def generate_audio_stream(self, state: object, text: str):
+            yield np.ones(2, dtype=np.float32)
+            yield np.ones(2, dtype=np.float32)
+
+    agent = TTSAgent(voice="alba", model=FakeModel())
+    progress: list[float] = []
+
+    audio = agent.synthesize_streaming("hello", on_progress=progress.append)
+
+    assert audio.shape[0] == 4
+    assert progress == [1.0, 2.0]
+
+
 def test_write_wav_array_accepts_a_file_like_object() -> None:
     # Regression test: write_wav_array used to unconditionally str(path) its
     # destination, which for a file-like object like BytesIO silently wrote

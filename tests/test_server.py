@@ -778,6 +778,12 @@ class _FakeSynthAgent:
 
         return np.ones(100, dtype=np.int16)
 
+    def stream_chunks(self, text: str):
+        # One chunk per fake call -- real TTSAgent.stream_chunks may yield
+        # several per sentence, but the tests here only assert on aggregate
+        # audio_chunk behavior (character/text), not chunk count.
+        yield self.synthesize(text)
+
 
 def _setup_session_fixture(tmp_path: Path):
     transcript = _fixture_transcript_for_rag()
@@ -1292,6 +1298,92 @@ def test_session_ws_chat_delivers_first_sentence_audio_before_generation_finishe
 
     assert first["type"] == "audio_chunk"
     assert first_elapsed < 0.4  # well before the 0.5s sleep before sentence two
+
+
+class _ManySmallChunksSynthAgent:
+    """A fake agent whose stream_chunks yields many tiny (10ms) chunks per
+    sentence, like pocket_tts's real ~80ms internal decode chunks -- proves
+    _coalesced_chunks groups them into a couple of reasonably-sized
+    websocket messages instead of one-message-per-raw-chunk."""
+
+    sample_rate = 1000
+
+    def use_voice_state(self, voice, state) -> None:
+        pass
+
+    def stream_chunks(self, text: str):
+        import numpy as np
+
+        for _ in range(20):  # 20 * 10 samples @ 1000Hz = 200ms of audio
+            yield np.ones(10, dtype=np.int16)
+
+
+def test_session_ws_chat_coalesces_many_small_synth_chunks_into_few_messages(tmp_path: Path) -> None:
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        yield "A single short sentence."
+
+    client = _client(
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=chat_stream_fn,
+        build_narrator_agent_fn=lambda cast_file: _ManySmallChunksSynthAgent(),
+    )
+    start = client.post(
+        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.send_json({"type": "chat", "text": "hello"})
+        messages = [ws.receive_json(), ws.receive_json()]
+
+    audio_messages = [m for m in messages if m["type"] == "audio_chunk"]
+    # 20 raw 10ms chunks (200ms total, below the 300ms coalescing floor) are
+    # never individually flushed mid-stream -- they all land in the single
+    # trailing flush once the generator is exhausted, not 20 messages.
+    assert len(audio_messages) == 1
+    assert audio_messages[0]["text"] == "A single short sentence."
+
+
+class _LongManySmallChunksSynthAgent(_ManySmallChunksSynthAgent):
+    """Same as _ManySmallChunksSynthAgent but produces enough audio (400ms)
+    to cross the coalescing floor once, so streaming actually splits into
+    a fast first piece plus one trailing piece -- not just one flush."""
+
+    def stream_chunks(self, text: str):
+        import numpy as np
+
+        for _ in range(40):  # 40 * 10 samples @ 1000Hz = 400ms of audio
+            yield np.ones(10, dtype=np.int16)
+
+
+def test_session_ws_chat_flushes_a_long_reply_in_two_coalesced_pieces(tmp_path: Path) -> None:
+    m4b_path, cast_path = _setup_session_fixture(tmp_path)
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        yield "A longer sentence with more audio in it."
+
+    client = _client(
+        embed_fn=_fake_embed_fn,
+        chat_stream_fn=chat_stream_fn,
+        build_narrator_agent_fn=lambda cast_file: _LongManySmallChunksSynthAgent(),
+    )
+    start = client.post(
+        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.send_json({"type": "chat", "text": "hello"})
+        messages = [ws.receive_json(), ws.receive_json(), ws.receive_json()]
+
+    audio_messages = [m for m in messages if m["type"] == "audio_chunk"]
+    # 400ms of audio, 300ms coalescing floor -- first flush at 300ms
+    # (carries the sentence text), second (trailing 100ms) has none.
+    assert len(audio_messages) == 2
+    assert audio_messages[0]["text"] == "A longer sentence with more audio in it."
+    assert audio_messages[1]["text"] == ""
 
 
 def test_session_ws_chat_sends_text_only_when_not_spoken(tmp_path: Path) -> None:

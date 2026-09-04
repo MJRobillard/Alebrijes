@@ -406,6 +406,17 @@ _FILLER_START_DELAY_S = 0.4
 # (e.g. a hung/misbehaving chat backend) -- ordinary use never gets close.
 _MAX_FILLER_CHUNKS_PER_CALL = 20
 
+# Minimum audio duration to accumulate from agent.stream_chunks (pocket_tts's
+# own ~80ms internal decode chunks) before sending a websocket audio_chunk
+# message, when streaming a sentence's synthesis progressively. Sending every
+# raw internal chunk as its own message got the first sound out fast but (a)
+# multiplied message count ~7x for a short reply and (b) reintroduces the
+# tiny per-clip <audio>-element startup gap makeAudioQueuePlayer's
+# swap-src-and-play scheme has for very short clips (audible micro-stutter).
+# Coalescing to this size keeps the win (first sound well under a second, for
+# any sentence long enough to have a "first chunk" at all) without either cost.
+_MIN_STREAM_CHUNK_SECONDS = 0.3
+
 
 def create_app(
     token: str,
@@ -1134,7 +1145,7 @@ def create_app(
                 if filler_task is not None and not filler_task.done():
                     loop.call_soon_threadsafe(filler_task.cancel)
 
-            def _synthesize(sentence: str) -> tuple["np.ndarray", str]:
+            def _pick_character(sentence: str) -> str:
                 # Regex-pick a cast voice from the sentence's own text (see
                 # _pick_voice_for_text) so a live LLM response speaks as
                 # whichever character it names, instead of always narrating
@@ -1149,17 +1160,55 @@ def create_app(
                     character = interactive_session.character_voice
                     if voice_states and NARRATOR in voice_states:
                         agent.use_voice_state(*voice_states[NARRATOR])
-                return agent.synthesize(sentence), character
+                return character
+
+            def _coalesced_chunks(sentence: str) -> Iterator["np.ndarray"]:
+                # Groups agent.stream_chunks's raw ~80ms internal decode
+                # chunks into >= _MIN_STREAM_CHUNK_SECONDS pieces (the tail
+                # end, however short, is always flushed) instead of either
+                # extreme: one message per tiny chunk (7x the message count
+                # for a short reply, and audible micro-gaps from
+                # makeAudioQueuePlayer's per-clip <audio>-element restart)
+                # or buffering the whole sentence (defeats the point --
+                # first sound wouldn't arrive until generation is done).
+                min_samples = int(_MIN_STREAM_CHUNK_SECONDS * agent.sample_rate)
+                buffer: list["np.ndarray"] = []
+                buffered_samples = 0
+                for chunk in agent.stream_chunks(sentence):
+                    buffer.append(chunk)
+                    buffered_samples += chunk.shape[-1]
+                    if buffered_samples >= min_samples:
+                        yield np.concatenate(buffer) if len(buffer) > 1 else buffer[0]
+                        buffer = []
+                        buffered_samples = 0
+                if buffer:
+                    yield np.concatenate(buffer) if len(buffer) > 1 else buffer[0]
+
+            def _synthesize_and_send_sentence(sentence: str) -> None:
+                # Streams coalesced audio out over the socket as it's ready
+                # rather than buffering the whole sentence first -- cuts
+                # time-to-first-sound for anything longer than a short
+                # clause, since sentence-level chunking (chunker.feed,
+                # above) alone still waits out one full sentence's
+                # generation. Only the first piece carries `text`/is a new
+                # chat-turn on the client (frontend/quiz.html only calls
+                # appendChatTurn when message.text is truthy) -- later
+                # pieces of the same sentence just extend the same queued
+                # audio.
+                character = _pick_character(sentence)
+                first = True
+                for piece in _coalesced_chunks(sentence):
+                    asyncio.run_coroutine_threadsafe(
+                        _send_audio(piece, text=sentence if first else "", character=character), loop
+                    ).result()
+                    first = False
 
             def _on_delta(delta: str) -> None:
                 if agent is None:
                     return
                 for sentence in chunker.feed(delta):
                     _stop_filler()
-                    audio, character = _synthesize(sentence)
-                    asyncio.run_coroutine_threadsafe(
-                        _send_audio(audio, text=sentence, character=character), loop
-                    ).result()
+                    _synthesize_and_send_sentence(sentence)
 
             try:
                 event = await run_in_threadpool(call_with_on_delta, _on_delta if agent is not None else None)
@@ -1168,8 +1217,16 @@ def create_app(
                 if agent is not None:
                     tail = chunker.flush()
                     if tail:
-                        audio, character = _synthesize(tail)
-                        await _send_audio(audio, text=tail, character=character)
+                        # Runs on the event loop thread already (unlike
+                        # _synthesize_and_send_sentence, called from
+                        # _on_delta on a worker thread) -- await directly
+                        # instead of run_coroutine_threadsafe, which would
+                        # deadlock blocking the loop on itself.
+                        character = _pick_character(tail)
+                        first = True
+                        for piece in _coalesced_chunks(tail):
+                            await _send_audio(piece, text=tail if first else "", character=character)
+                            first = False
             finally:
                 if filler_task is not None:
                     filler_task.cancel()
