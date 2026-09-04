@@ -126,47 +126,32 @@
   #quiz-prompt { font-weight: 600; margin-bottom: 0.6rem; }
   #quiz-choices-row { margin-bottom: 0.6rem; }
   #quiz-choices-row label { display: flex; align-items: center; gap: 0.4rem; }
-  .side-controls { display: flex; align-items: center; gap: 0.5rem; margin-left: auto; }
-  .toggle-dot {
-    display: inline-block;
-    width: 0.65rem;
-    height: 0.65rem;
-    border-radius: 50%;
-    padding: 0;
-    background: var(--ink-soft);
-    border: none;
-    cursor: pointer;
-  }
-  .toggle-dot.on { background: var(--accent); }
-  .toggle-dot.off { opacity: 0.5; }
-  #fillibuster-picker { display: flex; flex-direction: column; gap: 0.25rem; }
-  #fillibuster-picker label { display: flex; align-items: baseline; gap: 0.4rem; font-weight: normal; cursor: pointer; }
-  #fillibuster-picker .fillibuster-order { font-variant-numeric: tabular-nums; color: var(--accent); min-width: 1.2em; }
-  #fillibuster-picker .fillibuster-desc { color: var(--ink-soft); font-size: 0.85rem; }
-  #fillibuster-picker .hint { margin: 0 0 0.25rem; }
+  #fillibuster-row { margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--line); }
+  #fillibuster-row label { font-size: 0.85rem; color: var(--ink-soft); }
 </style>
 </head>
 <body>
 <main>
   <h1>Chapter Quiz</h1>
   <p class="subtitle">
-    Plays a preprocessed script chapter by chapter and asks its tagged multiple-choice
-    question at the end of each one.
+    Plays a pre-rendered audiobook and asks its tagged multiple-choice question at the
+    end of each chapter.
     <a id="back-link" href="#">&larr; Back to pipeline</a>
   </p>
 
   <section id="start-section">
     <h2>Start</h2>
     <p class="hint">
-      A script (.script) with chapter headings and <code>QUIZ:</code> markers (see the
-      checkpoint-author skill), plus its companion quiz file (.quiz.yaml). Cast is
-      optional — built from the script automatically if left blank. Upload both here
-      (or pick an already-local file, in the desktop app).
+      A pre-rendered audiobook (.m4b) with its <code>.transcript.json</code> sidecar
+      (built via <code>alebrijes render</code>, with <code>QUIZ:</code> markers in the
+      source script — see the checkpoint-author skill), plus its companion quiz file
+      (.quiz.yaml). Cast is only needed for spoken interactive replies, and is optional.
+      Upload here (or pick an already-local file, in the desktop app).
     </p>
     <div class="row">
-      <button id="choose-script-btn" hidden>Choose Script…</button>
-      <input type="file" id="script-upload-input" hidden accept=".script,.txt">
-      <input type="text" id="script-input" placeholder="/path/to/script.script" style="flex: 1;">
+      <button id="choose-audio-btn" hidden>Choose Audiobook…</button>
+      <input type="file" id="audio-upload-input" hidden accept=".m4b">
+      <input type="text" id="audio-input" placeholder="/path/to/book.m4b" style="flex: 1;">
     </div>
     <div class="row mt-sm">
       <button id="choose-quiz-btn" hidden>Choose Quiz…</button>
@@ -183,36 +168,30 @@
     <div class="mt-sm">
       <p class="hint">
         Which chapter to start narration from — the quiz still runs in order from there.
-        Loads once a script is chosen above.
+        Loads once the audiobook above is resolved.
       </p>
       <select id="start-chapter-select" disabled>
-        <option value="0">Chapter 1 (start of script)</option>
+        <option value="0">Chapter 1 (start of book)</option>
       </select>
     </div>
-    <div class="mt-sm">
-      <p class="hint">
-        Fillibuster scripts — read aloud, live, while a wrong-answer reply is generating. Check the
-        ones you want; the number shows the order they'll be read in (click again to unpick).
-      </p>
-      <div id="fillibuster-picker"></div>
-    </div>
+    <div id="load-status" class="status mt-sm"></div>
     <div class="row mt-md">
-      <button id="start-btn">Start</button>
+      <button id="start-btn" disabled>Start</button>
       <span id="start-status" class="status"></span>
     </div>
   </section>
 
   <section id="play-section" hidden>
     <div id="score" class="status" hidden style="font-weight: 600;"></div>
-    <div id="render-progress" class="status" hidden></div>
-    <div class="row mt-sm">
-      <div id="book-title" style="font-weight: 600;"></div>
-      <div class="side-controls" title="Fillibuster audio: your chosen scripts, read live while a wrong-answer reply is in flight">
-        <button id="filler-toggle-dot" class="toggle-dot on" type="button" title="Fillibuster audio (click to mute/unmute)"></button>
-      </div>
-    </div>
+    <div id="book-title" style="font-weight: 600;"></div>
     <audio id="player" controls></audio>
     <div id="transcript"></div>
+    <div id="fillibuster-row" class="row">
+      <label for="fillibuster-select">Side conversation, while waiting on a reply:</label>
+      <select id="fillibuster-select" disabled>
+        <option value="">(none)</option>
+      </select>
+    </div>
     <div id="chat-log" class="mt-md" style="max-height: 30vh; overflow-y: auto;"></div>
     <div id="thinking" class="status mt-sm" hidden style="font-style: italic;">Thinking…</div>
     <div id="quiz-panel" hidden>
@@ -228,7 +207,7 @@
       <button id="chat-send-btn">Send</button>
     </div>
     <audio id="response-player" hidden></audio>
-    <audio id="filler-player" hidden></audio>
+    <audio id="fillibuster-player" hidden></audio>
   </section>
 </main>
 
@@ -284,13 +263,13 @@
     });
   }
   detectPywebview().then(function (hasPywebview) {
-    ["choose-script-btn", "choose-quiz-btn", "choose-cast-btn"].forEach(function (id) {
+    ["choose-audio-btn", "choose-quiz-btn", "choose-cast-btn"].forEach(function (id) {
       document.getElementById(id).hidden = !hasPywebview;
     });
     // The reverse of the buttons above: a hosted (non-desktop) session has
     // no pywebview file-picker bridge to read an already-local path, so it
     // uploads the file to the server instead and gets a staged path back.
-    ["script-upload-input", "quiz-upload-input"].forEach(function (id) {
+    ["audio-upload-input", "quiz-upload-input"].forEach(function (id) {
       document.getElementById(id).hidden = hasPywebview;
     });
   });
@@ -312,6 +291,7 @@
       if (!file) return;
       const formData = new FormData();
       formData.append("file", file);
+      loadStatusEl.textContent = "Uploading " + file.name + "…";
       fetch("/api/upload", {
         method: "POST",
         headers: { "X-Alebrijes-Token": token },
@@ -320,61 +300,83 @@
         if (!r.ok) throw new Error("Upload failed (" + r.status + ")");
         return r.json();
       }).then(function (result) {
+        loadStatusEl.textContent = "";
         targetInputEl.value = result.path;
         targetInputEl.dispatchEvent(new Event("change"));
       }).catch(function (err) {
-        startStatusEl.textContent = err.message || String(err);
+        loadStatusEl.textContent = err.message || String(err);
       });
     });
   }
-  const scriptInput = document.getElementById("script-input");
+  const audioInput = document.getElementById("audio-input");
   const quizInput = document.getElementById("quiz-input");
   const castInput = document.getElementById("cast-input");
   const chatModelSelect = document.getElementById("chat-model-select");
   const startChapterSelect = document.getElementById("start-chapter-select");
-  wireFilePicker("choose-script-btn", scriptInput, "pick_script_file");
+  const loadStatusEl = document.getElementById("load-status");
+  const startBtn = document.getElementById("start-btn");
+  wireFilePicker("choose-audio-btn", audioInput, "pick_audio_file");
   wireFilePicker("choose-quiz-btn", quizInput, "pick_quiz_file");
   wireFilePicker("choose-cast-btn", castInput, "pick_cast_file");
-  wireFileUpload("script-upload-input", scriptInput);
+  wireFileUpload("audio-upload-input", audioInput);
   wireFileUpload("quiz-upload-input", quizInput);
   populateModelSelect(chatModelSelect);
 
-  // Reloads the chapter picker whenever the script path changes (typed,
-  // pywebview-picked, or uploaded -- see the dispatchEvent("change") calls
-  // above) so the listener can choose where narration starts; defaults to
-  // chapter 0 (the whole script) until a script is actually resolved.
-  scriptInput.addEventListener("change", function () {
-    const scriptPath = scriptInput.value.trim();
+  const state = {
+    ws: null,
+    sessionId: null,
+    audioPath: null,
+    transcript: null,
+    currentSpanId: null,
+  };
+
+  // Loads the transcript + audio for the chosen .m4b (mirrors listen.html's
+  // loadBook) whenever the audio path changes (typed, pywebview-picked, or
+  // uploaded -- see the dispatchEvent("change") calls above): populates the
+  // chapter picker and the main <audio> element, and only then enables
+  // Start. Quiz.html has no live-render path any more -- if this fails,
+  // there's nothing else to fall back to.
+  audioInput.addEventListener("change", function () {
+    const audioPath = audioInput.value.trim();
     startChapterSelect.disabled = true;
-    startChapterSelect.innerHTML = '<option value="0">Chapter 1 (start of script)</option>';
-    if (!scriptPath) return;
-    apiFetch("/api/book/chapters", {
-      method: "POST",
-      body: JSON.stringify({ book: scriptPath }),
-    }).then(function (r) { return r.json(); }).then(function (result) {
+    startChapterSelect.innerHTML = '<option value="0">Chapter 1 (start of book)</option>';
+    startBtn.disabled = true;
+    state.audioPath = null;
+    state.transcript = null;
+    if (!audioPath) {
+      loadStatusEl.textContent = "";
+      return;
+    }
+    loadStatusEl.textContent = "Loading audiobook…";
+    Promise.all([
+      apiFetch("/api/book/transcript?path=" + encodeURIComponent(audioPath)).then(function (r) { return r.json(); }),
+      apiFetch("/api/book/audio?path=" + encodeURIComponent(audioPath)).then(function (r) { return r.blob(); }),
+    ]).then(function (results) {
+      const transcript = results[0];
+      const audioBlob = results[1];
+      state.audioPath = audioPath;
+      state.transcript = transcript;
+      player.src = URL.createObjectURL(audioBlob);
       startChapterSelect.innerHTML = "";
-      (result.chapters || []).forEach(function (chapter) {
+      (transcript.chapters || []).forEach(function (chapter) {
         const opt = document.createElement("option");
         opt.value = String(chapter.index);
         opt.textContent = "Chapter " + (chapter.index + 1) + ": " + chapter.title;
         startChapterSelect.appendChild(opt);
       });
-      startChapterSelect.disabled = (result.chapters || []).length === 0;
-    }).catch(function () {
-      // Chapter list is a convenience, not a hard requirement -- starting
-      // from chapter 0 (the default option already in place) still works.
-      startChapterSelect.disabled = true;
+      startChapterSelect.disabled = (transcript.chapters || []).length === 0;
+      startBtn.disabled = false;
+      loadStatusEl.textContent = "";
+    }).catch(function (err) {
+      loadStatusEl.textContent = err.message || String(err);
     });
   });
 
-  const startBtn = document.getElementById("start-btn");
   const startStatusEl = document.getElementById("start-status");
   const startSection = document.getElementById("start-section");
   const playSection = document.getElementById("play-section");
   const scoreEl = document.getElementById("score");
-  const renderProgressEl = document.getElementById("render-progress");
   const bookTitleEl = document.getElementById("book-title");
-  const fillerToggleDotEl = document.getElementById("filler-toggle-dot");
   const player = document.getElementById("player");
   const transcriptEl = document.getElementById("transcript");
   const chatLog = document.getElementById("chat-log");
@@ -387,10 +389,11 @@
   const chatRow = document.getElementById("chat-row");
   const chatInput = document.getElementById("chat-input");
   const chatSendBtn = document.getElementById("chat-send-btn");
+  const fillibusterSelect = document.getElementById("fillibuster-select");
+  const fillibusterPlayer = document.getElementById("fillibuster-player");
 
   // A small sequential-playback queue -- used for the graded reaction's own
-  // audio (responseAudioPlayer) and, separately, filler audio
-  // (fillerAudioPlayer), each against its own <audio> element.
+  // audio, against its own <audio> element.
   function makeAudioQueuePlayer(playerEl, onIdle) {
     const queue = [];
     let playing = false;
@@ -417,15 +420,6 @@
       isIdle: function () {
         return !playing && queue.length === 0;
       },
-      // Interrupts immediately -- clears anything queued and stops what's
-      // playing, without firing onIdle. Used by fillerAudioPlayer to cut
-      // cleanly the instant real content is ready, instead of draining to
-      // its own natural end first.
-      stop: function () {
-        queue.length = 0;
-        playing = false;
-        playerEl.pause();
-      },
     };
   }
 
@@ -441,90 +435,90 @@
       if (player.paused) player.play();
     }
   });
-  // Plays pre-rendered filler audio (server's "filler_audio_chunk"
-  // messages) while a wrong-answer/chat reply is in flight -- a separate
-  // player/queue from responseAudioPlayer so it can be cut immediately
-  // (see stop(), above) the moment real content is ready, without
-  // disturbing responseAudioPlayer's own narration-resume tracking.
-  const fillerAudioPlayer = makeAudioQueuePlayer(document.getElementById("filler-player"), null);
 
-  // Client-side only -- the server keeps streaming filler_audio_chunk
-  // either way (cheap to generate), this just decides whether to actually
-  // play what arrives. Defaults on.
-  let fillerEnabled = true;
-  fillerToggleDotEl.addEventListener("click", function () {
-    fillerEnabled = !fillerEnabled;
-    fillerToggleDotEl.classList.toggle("on", fillerEnabled);
-    fillerToggleDotEl.classList.toggle("off", !fillerEnabled);
-    if (!fillerEnabled) fillerAudioPlayer.stop();
+  // --- Fillibuster ("side conversation") dropdown -----------------------
+  //
+  // Entirely client-driven: the server only lists what's available
+  // (/api/fillibusters); this fetches each entry's already-rendered .m4b
+  // the same way the main narration audio is fetched (/api/book/audio),
+  // caches it as a blob URL, and plays/pauses it against `thinking` --
+  // no synthesis, no websocket messages, no session wiring at all. The
+  // listener can change the selection at any time, including mid-session;
+  // each entry remembers its own playback position across switches so
+  // tuning back into one picks up where it left off instead of restarting.
+  let fillibusters = [];
+  let selectedFillibusterId = "";
+  const fillibusterPositions = {};
+  const fillibusterBlobUrls = {};
+  let thinking = false;
+
+  function populateFillibusterSelect() {
+    apiFetch("/api/fillibusters").then(function (r) { return r.json(); }).then(function (result) {
+      fillibusters = result.fillibusters || [];
+      fillibusterSelect.innerHTML = '<option value="">(none)</option>';
+      fillibusters.forEach(function (meta) {
+        const opt = document.createElement("option");
+        opt.value = meta.id;
+        opt.textContent = meta.title;
+        fillibusterSelect.appendChild(opt);
+      });
+      fillibusterSelect.disabled = fillibusters.length === 0;
+    }).catch(function () {
+      fillibusterSelect.disabled = true;
+    });
+  }
+  populateFillibusterSelect();
+
+  function pauseFillibuster() {
+    if (!fillibusterPlayer.paused) {
+      fillibusterPositions[selectedFillibusterId] = fillibusterPlayer.currentTime;
+      fillibusterPlayer.pause();
+    }
+  }
+
+  function playFillibuster() {
+    if (!thinking || !selectedFillibusterId) return;
+    const meta = fillibusters.find(function (m) { return m.id === selectedFillibusterId; });
+    if (!meta) return;
+    const requestedId = selectedFillibusterId;
+
+    function startPlayback(url) {
+      // Guard against the selection or thinking state having changed while
+      // an initial fetch (below) was in flight.
+      if (!thinking || selectedFillibusterId !== requestedId) return;
+      fillibusterPlayer.src = url;
+      fillibusterPlayer.currentTime = fillibusterPositions[requestedId] || 0;
+      fillibusterPlayer.play();
+    }
+
+    if (fillibusterBlobUrls[requestedId]) {
+      startPlayback(fillibusterBlobUrls[requestedId]);
+      return;
+    }
+    apiFetch("/api/book/audio?path=" + encodeURIComponent(meta.path)).then(function (r) { return r.blob(); }).then(function (blob) {
+      const url = URL.createObjectURL(blob);
+      fillibusterBlobUrls[requestedId] = url;
+      startPlayback(url);
+    }).catch(function () { /* fillibuster playback is best-effort */ });
+  }
+
+  fillibusterSelect.addEventListener("change", function () {
+    pauseFillibuster();
+    selectedFillibusterId = fillibusterSelect.value;
+    playFillibuster();
   });
 
-  // Fillibuster library picker on the start form -- checking an entry adds
-  // it to selectedFillibusterIds in click order (that order is what's sent
-  // as fillibuster_ids, and so what order they're read in); unchecking
-  // removes it and renumbers the rest.
-  const fillibusterPickerEl = document.getElementById("fillibuster-picker");
-  let selectedFillibusterIds = [];
-
-  function renumberFillibusterPicker() {
-    fillibusterPickerEl.querySelectorAll("label").forEach(function (label) {
-      const id = label.dataset.fillibusterId;
-      const order = selectedFillibusterIds.indexOf(id);
-      label.querySelector(".fillibuster-order").textContent = order === -1 ? "" : String(order + 1) + ".";
-    });
+  function showThinking() {
+    thinkingEl.hidden = false;
+    thinking = true;
+    playFillibuster();
   }
 
-  function populateFillibusterPicker() {
-    apiFetch("/api/fillibusters").then(function (r) { return r.json(); }).then(function (result) {
-      fillibusterPickerEl.innerHTML = "";
-      const fillibusters = result.fillibusters || [];
-      if (fillibusters.length === 0) {
-        fillibusterPickerEl.innerHTML = '<span class="hint">No fillibuster scripts configured.</span>';
-        return;
-      }
-      fillibusters.forEach(function (meta) {
-        const label = document.createElement("label");
-        label.dataset.fillibusterId = meta.id;
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.addEventListener("change", function () {
-          if (checkbox.checked) {
-            selectedFillibusterIds.push(meta.id);
-          } else {
-            selectedFillibusterIds = selectedFillibusterIds.filter(function (id) { return id !== meta.id; });
-          }
-          renumberFillibusterPicker();
-        });
-        const order = document.createElement("span");
-        order.className = "fillibuster-order";
-        const title = document.createElement("span");
-        title.textContent = meta.title;
-        label.appendChild(checkbox);
-        label.appendChild(order);
-        label.appendChild(title);
-        if (meta.description) {
-          const desc = document.createElement("span");
-          desc.className = "fillibuster-desc";
-          desc.textContent = "— " + meta.description;
-          label.appendChild(desc);
-        }
-        fillibusterPickerEl.appendChild(label);
-      });
-    }).catch(function () {
-      fillibusterPickerEl.innerHTML = '<span class="hint">Could not load fillibuster scripts.</span>';
-    });
+  function hideThinking() {
+    thinkingEl.hidden = true;
+    thinking = false;
+    pauseFillibuster();
   }
-  populateFillibusterPicker();
-
-  const state = {
-    ws: null,
-    sessionId: null,
-    chapterQueue: [],
-    playingChapter: false,
-    currentChapterIndex: null,
-    currentChapterSpans: [],
-    currentSpanId: null,
-  };
 
   function appendChatTurn(role, text) {
     const div = document.createElement("div");
@@ -541,10 +535,9 @@
   }
 
   startBtn.addEventListener("click", function () {
-    const scriptPath = scriptInput.value.trim();
     const quizPath = quizInput.value.trim();
-    if (!scriptPath) {
-      startStatusEl.textContent = "Script path is required.";
+    if (!state.audioPath || !state.transcript) {
+      startStatusEl.textContent = "Choose an audiobook first.";
       return;
     }
     if (!quizPath) {
@@ -554,32 +547,28 @@
     startBtn.disabled = true;
     startStatusEl.textContent = "Starting…";
 
-    apiFetch("/api/session/start_live", {
+    apiFetch("/api/session/start", {
       method: "POST",
       body: JSON.stringify({
-        book: scriptPath,
+        m4b: state.audioPath,
         cast: castInput.value.trim() || null,
         mode: "learning",
         quiz_path: quizPath,
         chat_model: chatModelSelect.value || null,
-        fillibuster_ids: selectedFillibusterIds,
-        start_chapter_index: parseInt(startChapterSelect.value, 10) || 0,
-        lookahead_chapters: 3,
       }),
     }).then(function (r) { return r.json(); }).then(function (result) {
       state.sessionId = result.session_id;
-      state.chapterQueue = [];
-      state.playingChapter = false;
-      state.currentChapterIndex = null;
-      state.currentChapterSpans = [];
       state.currentSpanId = null;
       bookTitleEl.textContent = result.book_title || "";
-      transcriptEl.innerHTML = "";
+      renderTranscript(state.transcript);
       chatLog.innerHTML = "";
-      thinkingEl.hidden = true;
+      hideThinking();
       startSection.hidden = true;
       playSection.hidden = false;
       startStatusEl.textContent = result.spoken ? "Started (spoken)." : "Started (text-only).";
+      const startChapterIndex = parseInt(startChapterSelect.value, 10) || 0;
+      const chapter = (state.transcript.chapters || []).find(function (c) { return c.index === startChapterIndex; });
+      if (chapter) player.currentTime = chapter.start_ms / 1000;
       openSession(result.session_id);
       startBtn.disabled = false;
     }).catch(function (err) {
@@ -600,19 +589,8 @@
 
     ws.addEventListener("message", function (evt) {
       const message = JSON.parse(evt.data);
-      if (message.type === "chapter_ready") {
-        state.chapterQueue.push(message);
-        renderChapterSpans(message.spans);
-        if (!state.playingChapter) playNextChapter();
-        renderProgressEl.hidden = true;
-      } else if (message.type === "chapter_progress") {
-        renderProgressEl.hidden = false;
-        renderProgressEl.textContent =
-          "Rendering chapter " + (message.chapter_index + 1) + "… line " +
-          message.lines_done + " / " + message.lines_total;
-      } else if (message.type === "awaiting_input") {
-        thinkingEl.hidden = true;
-        fillerAudioPlayer.stop();
+      if (message.type === "awaiting_input") {
+        hideThinking();
         player.pause();
         appendChatTurn("narrator", message.text);
         if (message.choices) {
@@ -625,8 +603,7 @@
         }
       } else if (message.type === "answer") {
         clearResponseWatchdog();
-        thinkingEl.hidden = true;
-        fillerAudioPlayer.stop();
+        hideThinking();
         appendChatTurn("narrator", message.text);
         hideQuizPanel();
         chatInput.disabled = false;
@@ -645,19 +622,16 @@
         }
       } else if (message.type === "audio_chunk") {
         // The first chunk of a live reply is the earliest signal the wait
-        // is over -- hide "Thinking..."/cut filler here, not just on the
-        // final answer/awaiting_input, so it disappears the moment audio
-        // starts rather than sitting through the whole response.
-        thinkingEl.hidden = true;
-        fillerAudioPlayer.stop();
+        // is over -- hide "Thinking..."/the side conversation here, not
+        // just on the final answer/awaiting_input, so it disappears the
+        // moment audio starts rather than sitting through the whole
+        // response.
+        hideThinking();
         if (message.text) appendChatTurn("live", message.character + ": " + message.text);
         responseAudioPlayer.push(message.data);
-      } else if (message.type === "filler_audio_chunk") {
-        if (fillerEnabled) fillerAudioPlayer.push(message.data);
       } else if (message.type === "error") {
         clearResponseWatchdog();
-        thinkingEl.hidden = true;
-        fillerAudioPlayer.stop();
+        hideThinking();
         appendChatTurn("narrator", "Error: " + message.detail);
         // Don't hideQuizPanel() -- a pending quiz question is still
         // pending; losing the choices/panel here would strand the
@@ -671,34 +645,14 @@
         }
         chatInput.disabled = false;
         chatSendBtn.disabled = false;
-        renderProgressEl.hidden = true;
       }
     });
   }
 
-  function playNextChapter() {
-    const next = state.chapterQueue.shift();
-    if (next === undefined) {
-      state.playingChapter = false;
-      return;
-    }
-    state.playingChapter = true;
-    state.currentChapterIndex = next.chapter_index;
-    state.currentChapterSpans = next.spans;
-    state.currentSpanId = null;
-    player.src = "data:audio/wav;base64," + next.data;
-    player.play();
-  }
-
-  player.addEventListener("ended", function () {
-    if (state.ws && state.ws.readyState === WebSocket.OPEN && state.currentChapterIndex !== null) {
-      state.ws.send(JSON.stringify({ type: "chapter_consumed", chapter_index: state.currentChapterIndex }));
-    }
-    playNextChapter();
-  });
-
+  // Binary search: transcript.spans is sorted by start_ms (render order),
+  // so find the last span whose start_ms <= currentMs.
   function spanAt(currentMs) {
-    const spans = state.currentChapterSpans;
+    const spans = state.transcript.spans;
     let lo = 0, hi = spans.length - 1, best = null;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
@@ -713,6 +667,7 @@
   }
 
   player.addEventListener("timeupdate", function () {
+    if (!state.transcript) return;
     const span = spanAt(player.currentTime * 1000);
     if (!span || span.span_id === state.currentSpanId) return;
 
@@ -731,9 +686,10 @@
     }
   });
 
-  function renderChapterSpans(spans) {
+  function renderTranscript(transcript) {
+    transcriptEl.innerHTML = "";
     const frag = document.createDocumentFragment();
-    spans.forEach(function (span) {
+    transcript.spans.forEach(function (span) {
       const line = document.createElement("div");
       line.className = "span-line";
       line.id = "span-" + span.span_id;
@@ -842,12 +798,11 @@
     // A correct quiz answer is graded and spoken instantly (no LLM call);
     // a wrong answer or free text goes through the LLM, which can take a
     // few seconds -- without this, that wait looks identical to a stuck page.
-    thinkingEl.hidden = false;
+    showThinking();
     clearResponseWatchdog();
     responseTimeoutId = setTimeout(function () {
       responseTimeoutId = null;
-      thinkingEl.hidden = true;
-      fillerAudioPlayer.stop();
+      hideThinking();
       appendChatTurn("narrator", "Error: no response from the server -- it may be stuck. You can try again.");
       reenableInputs();
     }, RESPONSE_TIMEOUT_MS);
