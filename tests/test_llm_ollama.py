@@ -162,15 +162,50 @@ def test_keep_warm_stop_ends_the_heartbeat_thread() -> None:
     assert not handle._thread.is_alive()
 
 
-def test_keep_warm_stops_cleanly_when_ollama_unreachable() -> None:
+def test_keep_warm_keeps_retrying_when_ollama_is_unreachable() -> None:
+    """Ollama not being reachable *yet* (still starting up) is a timing
+    issue, not permanent -- the heartbeat must keep trying every interval,
+    not die on the first failed ping (see keep_warm's docstring)."""
+    call_count = [0]
+
     def handler(request: httpx.Request) -> httpx.Response:
+        call_count[0] += 1
         raise httpx.ConnectError("connection refused", request=request)
 
     client = _client_with_transport(handler)
     handle = client.keep_warm(interval_s=0.05)
-    handle._thread.join(timeout=2)
+    try:
+        deadline = time.monotonic() + 2.0
+        while call_count[0] < 3 and time.monotonic() < deadline:
+            time.sleep(0.01)
+    finally:
+        handle.stop()
 
-    assert not handle._thread.is_alive()
+    assert call_count[0] >= 3  # kept pinging across multiple failures
+    assert not handle._thread.is_alive()  # .stop() still ends it cleanly
+
+
+def test_keep_warm_recovers_once_ollama_becomes_reachable() -> None:
+    call_count = [0]
+    succeeded = [False]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count[0] += 1
+        if call_count[0] < 3:
+            raise httpx.ConnectError("connection refused", request=request)
+        succeeded[0] = True
+        return httpx.Response(200, json={"done": True})
+
+    client = _client_with_transport(handler)
+    handle = client.keep_warm(interval_s=0.05)
+    try:
+        deadline = time.monotonic() + 2.0
+        while not succeeded[0] and time.monotonic() < deadline:
+            time.sleep(0.01)
+    finally:
+        handle.stop()
+
+    assert succeeded[0]  # a later ping succeeded after earlier failures
 
 
 def test_chat_stream_holds_busy_lock_for_the_call_and_releases_after() -> None:

@@ -310,6 +310,17 @@ class InteractiveSession:
             "their specific answer, gently correcting the misconception.)"
         )
 
+    @staticmethod
+    def _fallback_incorrect_reaction(question: QuizQuestion) -> str:
+        """Used only if generating an in-character reaction to a wrong
+        answer fails (e.g. the local LLM is unreachable/timed out) -- the
+        grade itself already happened deterministically in
+        `_grade_quiz_answer`, so the listener still needs to hear the
+        correct answer even when the model can't react to it. See
+        `handle_user_message`."""
+        correct_text = question.options.get(question.correct, "")
+        return f"That's not quite right -- the correct answer was {question.correct}) {correct_text}."
+
     def _pick_praise(self, question: QuizQuestion) -> str:
         """An author-written `praise` on the question wins; otherwise
         rotate through a small generic list so consecutive correct answers
@@ -338,6 +349,11 @@ class InteractiveSession:
         # while a question is pending falls through to the normal flow
         # below rather than forcing a grade on an unrelated message.
         effective_message = user_message
+        # Set only for a graded *wrong* answer -- gives the except block
+        # below a deterministic fallback to speak if the LLM call itself
+        # fails, instead of stranding the listener with a bare error. Free
+        # text / CYOA turns have no such fallback and still raise.
+        fallback_question: Optional[QuizQuestion] = None
         if self.awaiting_quiz_question is not None:
             choice = parse_choice(user_message)
             if choice is not None:
@@ -358,6 +374,7 @@ class InteractiveSession:
                     self.state = SessionState.PLAYING
                     return SessionEvent(kind="answer", text=praise, sources=[])
                 effective_message = self._incorrect_note(choice, question)
+                fallback_question = question
 
         hits = self._retrieve(user_message)
         rag_excerpts = [hit.entry.text for hit in hits]
@@ -385,11 +402,18 @@ class InteractiveSession:
             current_paragraph=self._current_paragraph_text(),
         )
         chunks: list[str] = []
-        for delta in self._chat_stream_fn(messages):
+        try:
+            for delta in self._chat_stream_fn(messages):
+                if on_delta is not None:
+                    on_delta(delta)
+                chunks.append(delta)
+            answer = "".join(chunks)
+        except Exception:  # noqa: BLE001 -- see fallback_question comment above
+            if fallback_question is None:
+                raise
+            answer = self._fallback_incorrect_reaction(fallback_question)
             if on_delta is not None:
-                on_delta(delta)
-            chunks.append(delta)
-        answer = "".join(chunks)
+                on_delta(answer)
 
         self.history.append(ChatTurn(role="user", content=user_message))
         self.history.append(ChatTurn(role="assistant", content=answer))

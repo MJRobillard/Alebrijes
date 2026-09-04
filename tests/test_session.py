@@ -422,6 +422,50 @@ def test_incorrect_answer_grading_note_not_raw_user_text_is_sent_to_the_llm() ->
     assert session.history[-2].content == "I think A"
 
 
+def test_wrong_answer_falls_back_to_correct_answer_text_when_llm_call_fails() -> None:
+    """If the LLM can't be reached (Ollama down/restarting/timed out), the
+    listener still needs to hear that they were wrong and what the right
+    answer was -- the grade already happened deterministically, so this
+    shouldn't just raise and strand them with a bare error."""
+
+    def failing_chat_stream_fn(messages, *, model="hermes3:8b"):
+        raise ConnectionError("could not reach Ollama")
+        yield  # pragma: no cover -- makes this a generator, never reached
+
+    session = _session(
+        mode=SessionMode.LEARNING,
+        checkpoints=["0.2.0"],
+        quiz_checkpoints={"0.2.0": "q1"},
+        quiz_questions={"q1": _quiz_question()},
+        chat_stream_fn=failing_chat_stream_fn,
+    )
+    session.advance_position("0.2.0")
+
+    deltas = []
+    event = session.handle_user_message("A", on_delta=deltas.append)
+
+    assert session.quiz_progress.answered["q1"].correct is False  # grading still happened
+    assert "B" in event.text  # the correct option, spoken as a fallback
+    assert "delegated identity" in event.text
+    assert deltas == [event.text]  # still gets synthesized as audio, same as any other reply
+    assert session.state is SessionState.PLAYING  # not stuck in GENERATING_RESPONSE
+
+
+def test_free_text_chat_still_raises_when_llm_call_fails() -> None:
+    """No deterministic fallback exists for a free-text/CYOA turn -- unlike
+    a graded wrong answer, there's nothing to fall back to, so this should
+    still raise (server.py surfaces it as an "error" message)."""
+
+    def failing_chat_stream_fn(messages, *, model="hermes3:8b"):
+        raise ConnectionError("could not reach Ollama")
+        yield  # pragma: no cover
+
+    session = _session(chat_stream_fn=failing_chat_stream_fn)
+
+    with pytest.raises(ConnectionError):
+        session.handle_user_message("what's happening?")
+
+
 def test_correct_answer_skips_the_llm_and_speaks_praise_via_on_delta() -> None:
     calls = []
     deltas = []

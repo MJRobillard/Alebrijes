@@ -123,15 +123,20 @@ class OllamaClient:
         Pings immediately (so the model is warm as soon as this is called,
         not just after the first interval), then every `interval_s`
         thereafter. Skips a tick rather than queuing behind it if a real
-        `chat_stream` call is already in flight (see `_busy_lock`); on any
-        `OllamaUnavailable`-equivalent HTTP failure, logs once and stops the
-        heartbeat cleanly rather than looping errors forever -- consistent
-        with this module's "degrade gracefully when Ollama isn't running"
-        contract.
+        `chat_stream` call is already in flight (see `_busy_lock`).
+
+        Keeps retrying on every interval even after a failed ping -- Ollama
+        not being reachable *yet* (e.g. still starting up when the session
+        began) is a timing issue, not a permanent absence, and giving up
+        for the rest of the connection's lifetime meant every later
+        checkpoint paid the full cold-start cost with no way to recover.
+        Logs only on each state transition (first failure, then recovery),
+        not on every tick, so a genuinely-down Ollama doesn't spam the log.
         """
         stop_event = threading.Event()
 
         def _run() -> None:
+            unreachable = False
             while True:
                 if self._busy_lock.acquire(blocking=False):
                     try:
@@ -139,11 +144,17 @@ class OllamaClient:
                             f"{self._base_url}/api/generate",
                             json={"model": model, "keep_alive": keep_alive},
                         )
+                        if unreachable:
+                            logger.info("keep_warm: reached Ollama at %s again", self._base_url)
+                            unreachable = False
                     except httpx.HTTPError:
-                        logger.warning(
-                            "keep_warm: could not reach Ollama at %s, stopping heartbeat", self._base_url
-                        )
-                        return
+                        if not unreachable:
+                            logger.warning(
+                                "keep_warm: could not reach Ollama at %s, retrying every %.0fs",
+                                self._base_url,
+                                interval_s,
+                            )
+                            unreachable = True
                     finally:
                         self._busy_lock.release()
                 if stop_event.wait(interval_s):
