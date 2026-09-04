@@ -93,6 +93,7 @@ class OllamaClient:
         has `done: true` and no further content should be emitted after it.
         """
         self._busy_lock.acquire()
+        logger.info("chat_stream: requesting %r (%d messages)", model, len(messages))
         try:
             with self._client.stream(
                 "POST",
@@ -108,8 +109,10 @@ class OllamaClient:
                     if content:
                         yield content
                     if data.get("done"):
+                        logger.info("chat_stream: %r finished", model)
                         return
         except httpx.HTTPError as exc:
+            logger.warning("chat_stream: %r failed: %s", model, exc)
             raise OllamaUnavailable(f"Could not reach Ollama at {self._base_url}: {exc}") from exc
         finally:
             self._busy_lock.release()

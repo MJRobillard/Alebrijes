@@ -28,11 +28,14 @@ whole reply as a single chunk instead of incremental deltas.
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from typing import Iterator, Optional
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 MODEL_NAME = "local"
@@ -66,6 +69,7 @@ class ScripterClient:
         paragraph_match = _CURRENT_PARAGRAPH_RE.search(system_message)
         context = paragraph_match.group(1) if paragraph_match else None
 
+        logger.info("chat_stream: requesting scripter session %s", self._session_id)
         try:
             response = self._client.post(
                 f"{self._base_url}/chat",
@@ -73,6 +77,8 @@ class ScripterClient:
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
+            logger.warning("chat_stream: scripter session %s failed: %s", self._session_id, exc)
             raise ScripterUnavailable(f"Could not reach the local scripter server at {self._base_url}: {exc}") from exc
 
+        logger.info("chat_stream: scripter session %s finished", self._session_id)
         yield response.json()["reply"]

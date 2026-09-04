@@ -500,6 +500,7 @@
           chatInput.focus();
         }
       } else if (message.type === "answer") {
+        clearResponseWatchdog();
         thinkingEl.hidden = true;
         fillerAudioPlayer.stop();
         appendChatTurn("narrator", message.text);
@@ -531,6 +532,7 @@
         if (fillerEnabled) fillerAudioPlayer.push(message.data);
         refreshFillerQueueStatus(); // reflects the server's rotation either way
       } else if (message.type === "error") {
+        clearResponseWatchdog();
         thinkingEl.hidden = true;
         fillerAudioPlayer.stop();
         appendChatTurn("narrator", "Error: " + message.detail);
@@ -677,6 +679,34 @@
     if (evt.key === "Enter") sendMessage(quizTextInput.value.trim());
   });
 
+  // Longest a "chat"/"choice" round trip should ever legitimately take --
+  // generously past the backend's own worst case (the local scripter
+  // client's 120s read timeout, llm/scripter.py's _DEFAULT_TIMEOUT), so
+  // this only fires when the server-side call has truly stalled somewhere
+  // that timeout doesn't cover (e.g. blocked on the websocket send itself),
+  // not as a normal race against a slow-but-working reply. Without this, a
+  // stalled reply leaves "Thinking..." showing and every input disabled
+  // forever, with no way to recover except reloading the page.
+  const RESPONSE_TIMEOUT_MS = 130000;
+  let responseTimeoutId = null;
+
+  function clearResponseWatchdog() {
+    if (responseTimeoutId !== null) {
+      clearTimeout(responseTimeoutId);
+      responseTimeoutId = null;
+    }
+  }
+
+  function reenableInputs() {
+    chatInput.disabled = false;
+    chatSendBtn.disabled = false;
+    if (!quizPanel.hidden) {
+      quizChoicesRow.querySelectorAll("button, input").forEach(function (el) { el.disabled = false; });
+      quizTextInput.disabled = false;
+      quizTextSendBtn.disabled = false;
+    }
+  }
+
   function sendMessage(text) {
     if (!text || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
     appendChatTurn("user", text);
@@ -690,6 +720,14 @@
     // a wrong answer or free text goes through the LLM, which can take a
     // few seconds -- without this, that wait looks identical to a stuck page.
     thinkingEl.hidden = false;
+    clearResponseWatchdog();
+    responseTimeoutId = setTimeout(function () {
+      responseTimeoutId = null;
+      thinkingEl.hidden = true;
+      fillerAudioPlayer.stop();
+      appendChatTurn("narrator", "Error: no response from the server -- it may be stuck. You can try again.");
+      reenableInputs();
+    }, RESPONSE_TIMEOUT_MS);
     state.ws.send(JSON.stringify({ type: "chat", text: text }));
   }
 })();

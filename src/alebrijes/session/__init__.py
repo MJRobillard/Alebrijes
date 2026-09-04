@@ -13,6 +13,7 @@ that feeds this session its audio.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -25,6 +26,8 @@ from alebrijes.lesson import load_progress as load_quiz_progress
 from alebrijes.llm.prompts import ChatTurn, Mode as SessionMode, build_messages
 from alebrijes.rag import RagIndex, search as search_rag
 from alebrijes.transcript import Transcript
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_HISTORY_LIMIT = 8
 DEFAULT_MAX_IMPROV_EXCHANGES = 3
@@ -376,7 +379,17 @@ class InteractiveSession:
                 effective_message = self._incorrect_note(choice, question)
                 fallback_question = question
 
-        hits = self._retrieve(user_message)
+        try:
+            hits = self._retrieve(user_message)
+        except Exception:
+            # RAG retrieval (an embedding call, separate from the chat
+            # model) failing shouldn't take down the whole turn -- a wrong
+            # answer still has a deterministic fallback reaction below, and
+            # even a free-text question can still get an answer, just
+            # without book excerpts grounding it. Logged, unlike before,
+            # so this isn't indistinguishable from a genuine hang.
+            logger.warning("RAG retrieval failed for %r; continuing without excerpts", user_message, exc_info=True)
+            hits = []
         rag_excerpts = [hit.entry.text for hit in hits]
         sources = [hit.entry.span_id for hit in hits]
 
@@ -411,6 +424,9 @@ class InteractiveSession:
         except Exception:  # noqa: BLE001 -- see fallback_question comment above
             if fallback_question is None:
                 raise
+            logger.warning(
+                "chat call failed while reacting to a wrong quiz answer; using fallback reaction", exc_info=True
+            )
             answer = self._fallback_incorrect_reaction(fallback_question)
             if on_delta is not None:
                 on_delta(answer)
