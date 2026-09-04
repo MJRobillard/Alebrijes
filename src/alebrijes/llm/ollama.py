@@ -12,11 +12,15 @@ session layer, the server) can catch one clear error type and tell the user
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
 from typing import Iterator, Optional
 
 import httpx
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "http://localhost:11434"
 # Env-var overridable, not hardcoded-only -- so switching to a faster/slower
@@ -34,15 +38,45 @@ DEFAULT_EMBED_MODEL = os.environ.get("ALEBRIJES_EMBED_MODEL", "nomic-embed-text"
 # message (server.py's session_ws) rather than crashing the connection.
 _DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
 
+# How long Ollama should keep a model resident after a keep_warm ping --
+# comfortably longer than DEFAULT_KEEPWARM_INTERVAL_S below so a model never
+# evicts between two heartbeats even if one tick is skipped (see
+# OllamaClient.keep_warm).
+DEFAULT_KEEPALIVE = "5m"
+# A local latency test (see the repo's ollama_latency scratchpad) measured
+# 15-23s cold-start vs. 0.3-0.7s warm time-to-first-token on the 8B chat
+# models -- frequent enough to keep a model warm through normal think/pause
+# gaps, infrequent enough not to be a meaningful load on its own.
+DEFAULT_KEEPWARM_INTERVAL_S = 45.0
+
 
 class OllamaUnavailable(Exception):
     """Raised when the local Ollama server can't be reached or errors out."""
+
+
+class KeepWarmHandle:
+    """Returned by `OllamaClient.keep_warm`; `.stop()` ends the background
+    heartbeat. Mirrors the stop()/daemon-thread pattern already used by
+    `session/buffer.py`'s `LookaheadRenderer`."""
+
+    def __init__(self, stop_event: threading.Event, thread: threading.Thread) -> None:
+        self._stop_event = stop_event
+        self._thread = thread
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self._thread.join(timeout=5)
 
 
 class OllamaClient:
     def __init__(self, base_url: str = DEFAULT_BASE_URL, client: Optional[httpx.Client] = None) -> None:
         self._base_url = base_url.rstrip("/")
         self._client = client or httpx.Client(timeout=_DEFAULT_TIMEOUT)
+        # Held for the duration of a real chat_stream call so keep_warm's
+        # heartbeat can tell one is in flight and skip its tick instead of
+        # queuing behind it -- a ping that has to wait for a real call would
+        # add latency to that call's response time, defeating the point.
+        self._busy_lock = threading.Lock()
 
     def chat_stream(self, messages: list[dict], *, model: str = DEFAULT_CHAT_MODEL) -> Iterator[str]:
         """Yields content deltas as Ollama streams a chat response.
@@ -51,6 +85,7 @@ class OllamaClient:
         line (NDJSON), each carrying the next content delta; the final line
         has `done: true` and no further content should be emitted after it.
         """
+        self._busy_lock.acquire()
         try:
             with self._client.stream(
                 "POST",
@@ -69,6 +104,54 @@ class OllamaClient:
                         return
         except httpx.HTTPError as exc:
             raise OllamaUnavailable(f"Could not reach Ollama at {self._base_url}: {exc}") from exc
+        finally:
+            self._busy_lock.release()
+
+    def keep_warm(
+        self,
+        model: str = DEFAULT_CHAT_MODEL,
+        *,
+        interval_s: float = DEFAULT_KEEPWARM_INTERVAL_S,
+        keep_alive: str = DEFAULT_KEEPALIVE,
+    ) -> KeepWarmHandle:
+        """Starts a daemon thread that pings `/api/generate` with an empty
+        prompt and a `keep_alive` duration -- Ollama's standard "keep this
+        model resident" idiom (the mirror of `keep_alive: 0`, which evicts
+        it immediately) -- so a real checkpoint call never has to pay the
+        cold-start cost of reloading weights from disk.
+
+        Pings immediately (so the model is warm as soon as this is called,
+        not just after the first interval), then every `interval_s`
+        thereafter. Skips a tick rather than queuing behind it if a real
+        `chat_stream` call is already in flight (see `_busy_lock`); on any
+        `OllamaUnavailable`-equivalent HTTP failure, logs once and stops the
+        heartbeat cleanly rather than looping errors forever -- consistent
+        with this module's "degrade gracefully when Ollama isn't running"
+        contract.
+        """
+        stop_event = threading.Event()
+
+        def _run() -> None:
+            while True:
+                if self._busy_lock.acquire(blocking=False):
+                    try:
+                        self._client.post(
+                            f"{self._base_url}/api/generate",
+                            json={"model": model, "keep_alive": keep_alive},
+                        )
+                    except httpx.HTTPError:
+                        logger.warning(
+                            "keep_warm: could not reach Ollama at %s, stopping heartbeat", self._base_url
+                        )
+                        return
+                    finally:
+                        self._busy_lock.release()
+                if stop_event.wait(interval_s):
+                    return
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        return KeepWarmHandle(stop_event, thread)
 
     def embed(self, text: str, *, model: str = DEFAULT_EMBED_MODEL) -> np.ndarray:
         try:
