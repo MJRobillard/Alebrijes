@@ -610,19 +610,3 @@ def test_qa_mode_does_not_include_coffee_premise() -> None:
     session.handle_user_message("who is Colin?")
 
     assert "A mysterious fog." not in calls[0][0]["content"]
-
-
-def test_next_fillibuster_sentence_returns_sentences_in_order_then_none() -> None:
-    session = _session(fillibuster_sentences=["First.", "Second."])
-
-    assert session.next_fillibuster_sentence() == "First."
-    assert session.next_fillibuster_sentence() == "Second."
-    assert session.next_fillibuster_sentence() is None
-    # Exhausted, not reset -- a later call still gets None, not a repeat.
-    assert session.next_fillibuster_sentence() is None
-
-
-def test_next_fillibuster_sentence_defaults_to_empty_and_returns_none_immediately() -> None:
-    session = _session()
-
-    assert session.next_fillibuster_sentence() is None

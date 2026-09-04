@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextlib
 import io
 import re
 import secrets
@@ -54,7 +53,7 @@ from alebrijes.llm.scripter import MODEL_NAME as SCRIPTER_MODEL_NAME
 from alebrijes.preview import synthesize_preview as default_synthesize_preview
 from alebrijes.render import NARRATOR, render_book as default_render_book
 from alebrijes.session import DEFAULT_MAX_IMPROV_EXCHANGES, InteractiveSession, SessionMode
-from alebrijes.session.fillibuster_library import list_fillibusters, load_fillibuster_sentences
+from alebrijes.session.fillibuster_library import list_fillibusters
 from alebrijes.synth.streaming import SentenceChunker
 from alebrijes.transcript import Transcript, load as load_transcript
 
@@ -260,10 +259,7 @@ class SessionStartRequest(BaseModel):
     checkpoints: list[str] = []
     chat_model: Optional[str] = None  # overrides the server's default Ollama chat model for this session only
     max_improv_exchanges: Optional[int] = None  # CYOA: turns of free improv before steering back to plot
-    # Listener-chosen fillibuster library scripts (see /api/fillibusters),
-    # read in this order while a checkpoint's wrong-answer/chat reply is in
-    # flight -- see session.fillibuster_library.
-    fillibuster_ids: list[str] = []
+    quiz_path: Optional[str] = None  # <name>.quiz.yaml; progress persists to its .progress.json sibling
 
 
 class SessionStartResponse(BaseModel):
@@ -290,10 +286,6 @@ class SessionStartLiveRequest(BaseModel):
     rag_json: Optional[str] = None
     quiz_path: Optional[str] = None  # <name>.quiz.yaml; progress persists to its .progress.json sibling
     coffee_path: Optional[str] = None  # <name>.coffee.md, free-form CYOA/"coffee mode" premise
-    # Listener-chosen fillibuster library scripts (see /api/fillibusters),
-    # read in this order while a checkpoint's wrong-answer/chat reply is in
-    # flight -- see session.fillibuster_library.
-    fillibuster_ids: list[str] = []
 
 
 IngestFn = Callable[[Path], Book]
@@ -410,15 +402,6 @@ def _default_ingest_book(book_path: Path) -> Book:
     return parse_book(book_path)
 
 
-# How long to wait for a real sentence before starting filler audio (see
-# _speak_llm_call's enable_filler) -- long enough that a fast path (a
-# correct quiz answer's praise, spoken with no LLM call at all) never
-# triggers it, short enough to still cover a real LLM round-trip's wait.
-_FILLER_START_DELAY_S = 0.4
-# Safety valve against looping filler forever if a real reply never arrives
-# (e.g. a hung/misbehaving chat backend) -- ordinary use never gets close.
-_MAX_FILLER_CHUNKS_PER_CALL = 20
-
 # Minimum audio duration to accumulate from agent.stream_chunks (pocket_tts's
 # own ~80ms internal decode chunks) before sending a websocket audio_chunk
 # message, when streaming a sentence's synthesis progressively. Sending every
@@ -505,13 +488,15 @@ def create_app(
 
     @app.get("/api/fillibusters", dependencies=[Depends(_verify_request)])
     def fillibusters() -> dict:
-        # Lists the repo-committed fillibuster script library (title/
-        # description per entry) for quiz.html's start-form picker -- the
-        # listener's selection is sent back as SessionStart(Live)Request.
-        # fillibuster_ids, in the order they want them read.
+        # Lists the repo-committed fillibuster audio library (id/title/path
+        # per entry) for quiz.html's side-conversation dropdown -- playback
+        # itself is entirely client-driven from here on: the client fetches
+        # `path` via /api/book/audio (same endpoint the main narration audio
+        # uses) and plays it directly, no server involvement or session
+        # wiring needed at all.
         return {
             "fillibusters": [
-                {"id": meta.id, "title": meta.title, "description": meta.description}
+                {"id": meta.id, "title": meta.title, "path": meta.path}
                 for meta in list_fillibusters(fillibusters_dir)
             ]
         }
@@ -560,21 +545,25 @@ def create_app(
 
     @app.post("/api/upload", response_model=UploadResponse, dependencies=[Depends(_verify_request)])
     async def upload(file: UploadFile = File(...)) -> UploadResponse:
-        # Stages an uploaded script/quiz.yaml (or any other request-time
-        # file, e.g. a coffee-mode premise) under its own uuid4
-        # subdirectory of uploads_dir, so two uploads sharing a filename
-        # (e.g. two different books both named "book.script") never
-        # collide -- then just returns the staged local path, which every
-        # session-start request already accepts (payload.book/quiz_path/
-        # etc. are plain filesystem paths resolved server-side; there's no
-        # separate "uploaded file id" concept to thread through).
+        # Stages an uploaded .m4b/quiz.yaml (or any other request-time file)
+        # under its own uuid4 subdirectory of uploads_dir, so two uploads
+        # sharing a filename (e.g. two different books both named
+        # "book.m4b") never collide -- then just returns the staged local
+        # path, which every session-start request already accepts
+        # (payload.m4b/quiz_path/etc. are plain filesystem paths resolved
+        # server-side; there's no separate "uploaded file id" concept to
+        # thread through).
         dest_dir = uploads_dir / uuid.uuid4().hex
         dest_dir.mkdir(parents=True, exist_ok=True)
         # Path(...).name strips any directory components a hostile/odd
         # filename might carry, so this can never write outside dest_dir.
         dest_path = dest_dir / Path(file.filename or "upload").name
-        contents = await file.read()
-        dest_path.write_bytes(contents)
+        # Copied in chunks, not one `await file.read()` -- an uploaded .m4b
+        # audiobook can be tens to hundreds of MB, which a single read()
+        # would hold entirely in memory at once.
+        with dest_path.open("wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                out.write(chunk)
         return UploadResponse(path=str(dest_path))
 
     @app.post("/api/book/chapters", response_model=BookChaptersResponse, dependencies=[Depends(_verify_request)])
@@ -832,16 +821,13 @@ def create_app(
 
     @app.post("/api/session/start", response_model=SessionStartResponse, dependencies=[Depends(_verify_request)])
     def session_start(payload: SessionStartRequest) -> SessionStartResponse:
-        from alebrijes.rag import load as load_rag_index
+        from alebrijes import lesson
+        from alebrijes.rag import RagIndex, load as load_rag_index
 
         m4b_path = Path(payload.m4b)
         transcript_path = m4b_path.with_suffix(".transcript.json")
-        rag_npz_path = m4b_path.with_suffix(".rag.npz")
-        rag_json_path = m4b_path.with_suffix(".rag.json")
         if not transcript_path.exists():
             raise HTTPException(status_code=400, detail=f"No transcript found for {m4b_path}")
-        if not rag_npz_path.exists() or not rag_json_path.exists():
-            raise HTTPException(status_code=400, detail="RAG index not found — run `alebrijes rag build` first.")
 
         try:
             mode = SessionMode(payload.mode)
@@ -854,12 +840,36 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         transcript = load_transcript(transcript_path)
-        rag_index = load_rag_index(rag_npz_path, rag_json_path)
 
-        try:
-            fillibuster_sentences = load_fillibuster_sentences(fillibusters_dir, payload.fillibuster_ids)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # A RAG index only grounds free-text chat/CYOA -- quiz questions are
+        # asked verbatim (never through the LLM) and a wrong-answer reaction
+        # already tolerates missing retrieval (see InteractiveSession.
+        # handle_user_message). So a missing index degrades gracefully to
+        # empty (unlike this used to unconditionally 400) rather than
+        # blocking a quiz session on a `alebrijes rag build` step it may not
+        # need at all.
+        rag_npz_path = m4b_path.with_suffix(".rag.npz")
+        rag_json_path = m4b_path.with_suffix(".rag.json")
+        rag_index = (
+            load_rag_index(rag_npz_path, rag_json_path)
+            if rag_npz_path.exists() and rag_json_path.exists()
+            else RagIndex(entries=[], vectors=np.zeros((0, 0), dtype=np.float32))
+        )
+
+        # Lesson mode: a quiz file's questions are looked up by the span_ids
+        # the transcript already carries (Transcript.quiz_checkpoints,
+        # persisted at render time from the source script's `QUIZ:`
+        # markers -- see render.py/transcript.py) -- the author declares a
+        # quiz position once, in the script, not again in this request.
+        quiz_questions: dict = {}
+        quiz_progress_path: Optional[Path] = None
+        checkpoints = list(payload.checkpoints)
+        if payload.quiz_path:
+            quiz_file_path = Path(payload.quiz_path)
+            if quiz_file_path.exists():
+                quiz_questions = lesson.load_quiz(quiz_file_path)
+                quiz_progress_path = quiz_file_path.with_suffix(".progress.json")
+                checkpoints = list(dict.fromkeys(checkpoints + list(transcript.quiz_checkpoints.keys())))
 
         interactive_session = InteractiveSession(
             book_title=transcript.book_title,
@@ -869,13 +879,15 @@ def create_app(
             embed_fn=embed_fn,
             chat_stream_fn=_pin_chat_model(chat_stream_fn, payload.chat_model),
             mode=mode,
-            checkpoints=payload.checkpoints,
+            checkpoints=checkpoints,
             max_improv_exchanges=(
                 payload.max_improv_exchanges
                 if payload.max_improv_exchanges is not None
                 else DEFAULT_MAX_IMPROV_EXCHANGES
             ),
-            fillibuster_sentences=fillibuster_sentences,
+            quiz_questions=quiz_questions,
+            quiz_checkpoints=transcript.quiz_checkpoints,
+            quiz_progress_path=quiz_progress_path,
         )
 
         try:
@@ -966,11 +978,6 @@ def create_app(
             if coffee_file_path.exists():
                 coffee_premise = lesson.load_coffee_premise(coffee_file_path)
 
-        try:
-            fillibuster_sentences = load_fillibuster_sentences(fillibusters_dir, payload.fillibuster_ids)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
         transcript = Transcript(book_title=book.title, chapters=[], spans=[])
         interactive_session = InteractiveSession(
             book_title=book.title,
@@ -990,7 +997,6 @@ def create_app(
             quiz_checkpoints=book.quiz_checkpoints,
             quiz_progress_path=quiz_progress_path,
             coffee_premise=coffee_premise,
-            fillibuster_sentences=fillibuster_sentences,
         )
 
         chapter_queue: "queue_module.Queue" = queue_module.Queue()
@@ -1136,17 +1142,7 @@ def create_app(
                 }
             )
 
-        async def _send_filler_audio(audio: "np.ndarray", sample_rate: int) -> None:
-            wav_bytes = _audio_to_wav_bytes(sample_rate, audio)
-            await _send(
-                {
-                    "type": "filler_audio_chunk",
-                    "sample_rate": sample_rate,
-                    "data": base64.b64encode(wav_bytes).decode("ascii"),
-                }
-            )
-
-        async def _speak_llm_call(call_with_on_delta, *, enable_filler: bool = False):
+        async def _speak_llm_call(call_with_on_delta):
             """Runs a blocking `InteractiveSession` call (`handle_user_message`
             or `advance_position`) in a worker thread, sending each sentence's
             audio out over the socket the moment it's synthesized instead of
@@ -1162,20 +1158,11 @@ def create_app(
             actual network delivery, not fired-and-forgotten from a thread
             that's about to move on to the next sentence.
 
-            `enable_filler=True` speaks the listener's chosen fillibuster
-            library scripts (`InteractiveSession.fillibuster_sentences`, see
-            `session.fillibuster_library`) live, one sentence at a time,
-            while nothing real has been sent yet -- meant for the
-            wrong-answer/chat path (the `quiz.html` "Thinking..." indicator's
-            exact spot), not `advance_position`'s checkpoint responses,
-            which are usually already prefetched by the time playback
-            reaches them (see `InteractiveSession.prefetch_checkpoint`).
-            Waits `_FILLER_START_DELAY_S` before its first sentence so a
-            fast path (e.g. a correct answer's praise, which never calls
-            the LLM at all) never triggers it; stops the moment real audio
-            is about to go out. A no-op, silently, if the listener picked no
-            scripts (or has already read through everything picked) --
-            never a hard dependency.
+            Filling the wait itself (the "Thinking..." indicator's exact
+            spot) is entirely client-side now -- quiz.html plays a
+            pre-rendered fillibuster .m4b it already has, no server
+            involvement -- so unlike before, this has no filler-audio path
+            of its own.
             """
             loop = asyncio.get_running_loop()
             chunker = SentenceChunker()
@@ -1196,48 +1183,6 @@ def create_app(
                     if voice_states and NARRATOR in voice_states:
                         agent.use_voice_state(*voice_states[NARRATOR])
                 return character
-
-            filler_task: Optional[asyncio.Task] = None
-            if enable_filler and agent is not None:
-
-                async def _synthesize_filler_sentence(sentence: str) -> "np.ndarray":
-                    _pick_character(sentence)
-                    return await run_in_threadpool(agent.synthesize, sentence)
-
-                async def _filler_loop() -> None:
-                    # Reads the listener's chosen fillibuster library scripts
-                    # (InteractiveSession.fillibuster_sentences,
-                    # session.fillibuster_library) live, one sentence at a
-                    # time, while nothing real has been sent yet. Stays one
-                    # sentence ahead the same way LookaheadRenderer/
-                    # _drain_chapters stay ahead of chapter playback -- the
-                    # *next* sentence is already synthesizing by the time the
-                    # current one finishes playing, instead of only starting
-                    # that synthesis once playback catches up to it.
-                    await asyncio.sleep(_FILLER_START_DELAY_S)
-                    sentence = interactive_session.next_fillibuster_sentence()
-                    if sentence is None:
-                        return  # nothing left in the library -- just let "Thinking..." sit
-                    upcoming = asyncio.create_task(_synthesize_filler_sentence(sentence))
-                    for _ in range(_MAX_FILLER_CHUNKS_PER_CALL):
-                        audio = await upcoming
-                        next_sentence = interactive_session.next_fillibuster_sentence()
-                        prefetch = (
-                            asyncio.create_task(_synthesize_filler_sentence(next_sentence))
-                            if next_sentence is not None
-                            else None
-                        )
-                        await _send_filler_audio(audio, agent.sample_rate)
-                        await asyncio.sleep(len(audio) / agent.sample_rate)
-                        if prefetch is None:
-                            return  # library exhausted -- just let "Thinking..." sit
-                        upcoming = prefetch
-
-                filler_task = asyncio.create_task(_filler_loop())
-
-            def _stop_filler() -> None:
-                if filler_task is not None and not filler_task.done():
-                    loop.call_soon_threadsafe(filler_task.cancel)
 
             def _coalesced_chunks(sentence: str) -> Iterator["np.ndarray"]:
                 # Groups agent.stream_chunks's raw ~80ms internal decode
@@ -1284,31 +1229,23 @@ def create_app(
                 if agent is None:
                     return
                 for sentence in chunker.feed(delta):
-                    _stop_filler()
                     _synthesize_and_send_sentence(sentence)
 
-            try:
-                event = await run_in_threadpool(call_with_on_delta, _on_delta if agent is not None else None)
-                _stop_filler()
+            event = await run_in_threadpool(call_with_on_delta, _on_delta if agent is not None else None)
 
-                if agent is not None:
-                    tail = chunker.flush()
-                    if tail:
-                        # Runs on the event loop thread already (unlike
-                        # _synthesize_and_send_sentence, called from
-                        # _on_delta on a worker thread) -- await directly
-                        # instead of run_coroutine_threadsafe, which would
-                        # deadlock blocking the loop on itself.
-                        character = _pick_character(tail)
-                        first = True
-                        for piece in _coalesced_chunks(tail):
-                            await _send_audio(piece, text=tail if first else "", character=character)
-                            first = False
-            finally:
-                if filler_task is not None:
-                    filler_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await filler_task
+            if agent is not None:
+                tail = chunker.flush()
+                if tail:
+                    # Runs on the event loop thread already (unlike
+                    # _synthesize_and_send_sentence, called from
+                    # _on_delta on a worker thread) -- await directly
+                    # instead of run_coroutine_threadsafe, which would
+                    # deadlock blocking the loop on itself.
+                    character = _pick_character(tail)
+                    first = True
+                    for piece in _coalesced_chunks(tail):
+                        await _send_audio(piece, text=tail if first else "", character=character)
+                        first = False
 
             return event
 
@@ -1482,8 +1419,7 @@ def create_app(
                         event = await _speak_llm_call(
                             lambda on_delta, text=text: interactive_session.handle_user_message(
                                 text, on_delta=on_delta
-                            ),
-                            enable_filler=True,
+                            )
                         )
                         await _send({"type": "answer", "text": event.text, "sources": event.sources})
 

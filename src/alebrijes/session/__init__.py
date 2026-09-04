@@ -78,7 +78,6 @@ class InteractiveSession:
         quiz_checkpoints: Optional[dict[str, str]] = None,
         quiz_progress_path: Optional[Path] = None,
         coffee_premise: str = "",
-        fillibuster_sentences: Optional[list[str]] = None,
     ) -> None:
         self.book_title = book_title
         self.character_voice = character_voice
@@ -106,16 +105,6 @@ class InteractiveSession:
         )
         self.coffee_premise = coffee_premise
         self.awaiting_quiz_question: Optional[QuizQuestion] = None
-
-        # Flat, pre-split sentences from the listener's chosen fillibuster
-        # library scripts (session.fillibuster_library), in read order,
-        # spoken live while an LLM call is in flight (server.py's
-        # _speak_llm_call filler loop) instead of the old rotating
-        # pre-rendered-clip mechanism. A single cursor, not per-script, so
-        # reading picks back up where it left off across every subsequent
-        # wait window in this session rather than restarting each time.
-        self.fillibuster_sentences = fillibuster_sentences or []
-        self._fillibuster_cursor = 0
 
         self._embed_fn = embed_fn
         self._chat_stream_fn = chat_stream_fn
@@ -170,21 +159,6 @@ class InteractiveSession:
         self.transcript.spans.extend(new_spans)
         for offset, span in enumerate(new_spans):
             self._seq_by_span_id[span.span_id] = start_seq + offset
-
-    def next_fillibuster_sentence(self) -> Optional[str]:
-        """Pops the next not-yet-read sentence from the listener's chosen
-        fillibuster library scripts, or `None` once they've all been read --
-        callers (server.py's filler loop) treat that the same as "no filler
-        available," letting the wait sit silent rather than looping or
-        erroring. Never rewinds/repeats: once read, a sentence is gone for
-        the rest of this session, same "don't restart" intent as picking up
-        the cursor across separate wait windows (see `fillibuster_sentences`
-        in `__init__`)."""
-        if self._fillibuster_cursor >= len(self.fillibuster_sentences):
-            return None
-        sentence = self.fillibuster_sentences[self._fillibuster_cursor]
-        self._fillibuster_cursor += 1
-        return sentence
 
     def _retrieve(self, query_text: str, *, max_seq: Optional[int] = None) -> list:
         if not self.rag_index.entries:

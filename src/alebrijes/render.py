@@ -270,7 +270,12 @@ def render_book(
 
         resolved_transcript_path = transcript_path or output_path.with_suffix(".transcript.json")
         save_transcript(
-            Transcript(book_title=book.title, chapters=chapter_marks, spans=all_timings),
+            Transcript(
+                book_title=book.title,
+                chapters=chapter_marks,
+                spans=all_timings,
+                quiz_checkpoints=book.quiz_checkpoints,
+            ),
             resolved_transcript_path,
         )
 

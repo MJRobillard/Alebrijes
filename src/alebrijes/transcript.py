@@ -44,6 +44,14 @@ class Transcript:
     book_title: str
     chapters: list[ChapterMark] = field(default_factory=list)
     spans: list[SpanTiming] = field(default_factory=list)
+    # span_id -> quiz question id, carried over from the source script's
+    # `QUIZ:` markers (ingest.script.parse's Book.quiz_checkpoints) so a
+    # pre-rendered .m4b's quiz positions survive into its transcript sidecar
+    # instead of being discarded once rendering finishes -- lets
+    # /api/session/start derive checkpoints/questions from just the m4b +
+    # quiz.yaml, without needing the original script re-parsed at
+    # session-start time.
+    quiz_checkpoints: dict[str, str] = field(default_factory=dict)
 
 
 def load(path: Path) -> Transcript:
@@ -52,7 +60,12 @@ def load(path: Path) -> Transcript:
     spans = [
         SpanTiming(**{**span, "kind": SpanKind[span["kind"]]}) for span in data.get("spans", [])
     ]
-    return Transcript(book_title=data["book_title"], chapters=chapters, spans=spans)
+    return Transcript(
+        book_title=data["book_title"],
+        chapters=chapters,
+        spans=spans,
+        quiz_checkpoints=data.get("quiz_checkpoints", {}),
+    )
 
 
 def save(transcript: Transcript, path: Path) -> None:
@@ -75,6 +88,7 @@ def save(transcript: Transcript, path: Path) -> None:
             }
             for s in transcript.spans
         ],
+        "quiz_checkpoints": transcript.quiz_checkpoints,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2))

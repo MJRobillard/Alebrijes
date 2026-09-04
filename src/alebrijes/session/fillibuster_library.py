@@ -1,17 +1,20 @@
-"""A repo-committed library of full scripts the listener can choose to have
-read aloud, live, while waiting on an LLM call (a checkpoint reaction or a
-wrong-answer/chat reply) -- replaces `session.fillibuster`'s old mechanism
-(rotating short, generic pre-rendered `.wav` filler clips) entirely.
+"""A repo-committed library of pre-rendered "side conversation" audio clips
+the listener can pick, live, to play as filler while a checkpoint's
+wrong-answer/chat LLM reply is in flight.
 
-Each entry is a `<id>.txt` (plain prose, read start to finish in the
-session's own narrator voice via the same live-synthesis pipeline real
-narration/responses use -- no `NAME:`/`QUIZ:` script syntax; this isn't a
-book, just text to read) plus a companion `<id>.yaml` (`title`/
-`description` metadata for the picker on the quiz start form).
+Entirely client-driven (see `frontend/quiz.html`): the server's only job is
+listing what's available (this module) -- playback, per-clip position
+memory, and start/stop timing all live in the browser, reusing the same
+`/api/book/audio`/`/api/book/transcript` endpoints the main narration audio
+already goes through. No live synthesis happens anywhere in this path,
+matching how the main book itself is played (a pre-rendered `.m4b`, never
+synthesized on demand during a session).
 
-The quiz's own script + quiz.yaml stay upload-at-run-time and are handled
-entirely separately (`ingest.script`, `lesson.py`) -- this module is only
-for the repo-committed filler-content library.
+Each entry is produced by the ordinary `alebrijes render` pipeline like any
+other book: a `<id>.m4b` with its own `<id>.transcript.json` sidecar (its
+`book_title` is this entry's display title -- no separate metadata file).
+A `<id>.quiz.yaml` may also exist if the source script happened to carry its
+own `QUIZ:` markers, but the fillibuster picker itself doesn't use it.
 """
 
 from __future__ import annotations
@@ -19,67 +22,29 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
+from alebrijes.transcript import load as load_transcript
 
 
 @dataclass
 class FillibusterMeta:
     id: str
     title: str
-    description: str = ""
+    path: str  # the .m4b's path -- feed straight into /api/book/audio's `path` query param
 
 
 def list_fillibusters(directory: Path) -> list[FillibusterMeta]:
-    """Every `<id>.txt` with a companion `<id>.yaml` in `directory`, sorted
-    by id. `[]` if the directory doesn't exist or holds no complete pairs --
-    a `.txt` with no metadata sibling is silently skipped rather than
-    guessed at, since title/description drive what the listener sees in the
-    picker."""
+    """Every `<id>.m4b` with a companion `<id>.transcript.json` in
+    `directory`, sorted by id. `[]` if the directory doesn't exist or holds
+    no complete pairs -- an `.m4b` with no transcript sidecar is silently
+    skipped (no title to show, and it wouldn't have been produced by
+    `alebrijes render` in the first place)."""
     if not directory.exists():
         return []
     metas: list[FillibusterMeta] = []
-    for txt_path in sorted(directory.glob("*.txt")):
-        yaml_path = txt_path.with_suffix(".yaml")
-        if not yaml_path.exists():
+    for m4b_path in sorted(directory.glob("*.m4b")):
+        transcript_path = m4b_path.with_suffix(".transcript.json")
+        if not transcript_path.exists():
             continue
-        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
-        metas.append(
-            FillibusterMeta(
-                id=txt_path.stem,
-                title=data.get("title", txt_path.stem),
-                description=data.get("description", ""),
-            )
-        )
+        transcript = load_transcript(transcript_path)
+        metas.append(FillibusterMeta(id=m4b_path.stem, title=transcript.book_title, path=str(m4b_path)))
     return metas
-
-
-def load_fillibuster_text(directory: Path, fillibuster_id: str) -> str:
-    """Raw text of one library entry by id. Raises `FileNotFoundError` if
-    missing -- unlike `list_fillibusters`'s quiet skip, a caller resolving an
-    id the listener actually selected wants to know if it's gone, not have
-    it silently vanish from the read order."""
-    path = directory / f"{fillibuster_id}.txt"
-    if not path.exists():
-        raise FileNotFoundError(f"Fillibuster script not found: {path}")
-    return path.read_text(encoding="utf-8").strip()
-
-
-def load_fillibuster_sentences(directory: Path, fillibuster_ids: list[str]) -> list[str]:
-    """Concatenates the given library entries, in the given (listener-
-    chosen) order, into one flat list of sentences -- seeds
-    `InteractiveSession.fillibuster_sentences` at session start. Reuses
-    `synth.streaming.SentenceChunker`'s sentence-boundary splitting (the
-    same one LLM output goes through) rather than a separate splitter, so a
-    fillibuster script and a live LLM reply sound the same going into
-    synthesis."""
-    from alebrijes.synth.streaming import SentenceChunker
-
-    sentences: list[str] = []
-    for fillibuster_id in fillibuster_ids:
-        text = load_fillibuster_text(directory, fillibuster_id)
-        chunker = SentenceChunker()
-        sentences.extend(chunker.feed(text))
-        tail = chunker.flush()
-        if tail:
-            sentences.append(tail)
-    return sentences

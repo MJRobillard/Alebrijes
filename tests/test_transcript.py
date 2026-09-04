@@ -62,3 +62,23 @@ def test_load_restores_span_kind_enum(tmp_path: Path) -> None:
 
     assert loaded.spans[0].kind is SpanKind.NARRATION
     assert loaded.spans[1].kind is SpanKind.DIALOGUE
+
+
+def test_quiz_checkpoints_round_trip(tmp_path: Path) -> None:
+    transcript = _transcript()
+    transcript.quiz_checkpoints = {"0.0.1": "q1"}
+    path = tmp_path / "book.transcript.json"
+
+    save(transcript, path)
+    loaded = load(path)
+
+    assert loaded.quiz_checkpoints == {"0.0.1": "q1"}
+
+
+def test_quiz_checkpoints_defaults_to_empty_dict_when_absent_from_json(tmp_path: Path) -> None:
+    path = tmp_path / "book.transcript.json"
+    path.write_text('{"book_title": "Old Sidecar", "chapters": [], "spans": []}')
+
+    loaded = load(path)
+
+    assert loaded.quiz_checkpoints == {}

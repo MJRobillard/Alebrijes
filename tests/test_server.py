@@ -636,20 +636,22 @@ def test_quiz_route_is_unauthenticated_static_shell() -> None:
     assert "text/html" in response.headers["content-type"]
 
 
-def _write_fillibuster_fixture(
-    directory: Path, fillibuster_id: str, text: str, *, title: str | None = None, description: str = ""
-) -> None:
+def _write_fillibuster_fixture(directory: Path, fillibuster_id: str, *, title: str | None = None) -> None:
+    from alebrijes.transcript import Transcript
+    from alebrijes.transcript import save as save_transcript
+
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / f"{fillibuster_id}.txt").write_text(text, encoding="utf-8")
-    (directory / f"{fillibuster_id}.yaml").write_text(
-        f"title: {title or fillibuster_id}\ndescription: {description}\n", encoding="utf-8"
+    (directory / f"{fillibuster_id}.m4b").write_bytes(b"not real audio, just a fixture placeholder")
+    save_transcript(
+        Transcript(book_title=title or fillibuster_id),
+        directory / f"{fillibuster_id}.transcript.json",
     )
 
 
 def test_fillibusters_endpoint_lists_library_metadata(tmp_path: Path) -> None:
     fillibusters_dir = tmp_path / "fillibusters"
-    _write_fillibuster_fixture(fillibusters_dir, "a", "Filler A.", title="A Title", description="About A")
-    _write_fillibuster_fixture(fillibusters_dir, "b", "Filler B.", title="B Title", description="About B")
+    _write_fillibuster_fixture(fillibusters_dir, "a", title="A Title")
+    _write_fillibuster_fixture(fillibusters_dir, "b", title="B Title")
 
     client = _client(fillibusters_dir=fillibusters_dir)
     response = client.get("/api/fillibusters", headers=_headers())
@@ -657,8 +659,8 @@ def test_fillibusters_endpoint_lists_library_metadata(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json() == {
         "fillibusters": [
-            {"id": "a", "title": "A Title", "description": "About A"},
-            {"id": "b", "title": "B Title", "description": "About B"},
+            {"id": "a", "title": "A Title", "path": str(fillibusters_dir / "a.m4b")},
+            {"id": "b", "title": "B Title", "path": str(fillibusters_dir / "b.m4b")},
         ]
     }
 
@@ -866,7 +868,7 @@ def _setup_session_fixture(tmp_path: Path):
     return m4b_path, cast_path
 
 
-def test_session_start_requires_existing_transcript_and_rag_index(tmp_path: Path) -> None:
+def test_session_start_requires_an_existing_transcript(tmp_path: Path) -> None:
     cast_path = tmp_path / "book.cast.yaml"
     save_cast(CastFile(book_title="Fixture", entries=[]), cast_path)
 
@@ -877,6 +879,24 @@ def test_session_start_requires_existing_transcript_and_rag_index(tmp_path: Path
         json={"m4b": str(tmp_path / "missing.m4b"), "cast": str(cast_path)},
     )
     assert response.status_code == 400
+
+
+def test_session_start_works_without_a_rag_index(tmp_path: Path) -> None:
+    # A RAG index only grounds free-text chat/CYOA -- a quiz session (m4b +
+    # quiz.yaml) shouldn't need a separate `alebrijes rag build` step first.
+    transcript = _fixture_transcript_for_rag()
+    m4b_path = tmp_path / "book.m4b"
+    save_transcript(transcript, m4b_path.with_suffix(".transcript.json"))
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture", entries=[]), cast_path)
+    assert not m4b_path.with_suffix(".rag.npz").exists()
+
+    client = _client(embed_fn=_fake_embed_fn, chat_stream_fn=_fake_chat_stream)
+    response = client.post(
+        "/api/session/start", headers=_headers(), json={"m4b": str(m4b_path), "cast": str(cast_path)}
+    )
+
+    assert response.status_code == 200
 
 
 def test_session_start_reports_spoken_true_when_narrator_agent_builds(tmp_path: Path) -> None:
@@ -918,112 +938,6 @@ def test_session_start_with_chat_model_pins_it_for_that_sessions_chat_calls(tmp_
         ws.receive_json()
 
     assert seen_models == ["deepseek-r1:1.5b"]
-
-
-
-def test_ws_chat_streams_filler_audio_while_waiting_on_a_slow_reply(tmp_path: Path) -> None:
-    m4b_path, cast_path = _setup_session_fixture(tmp_path)
-    fillibusters_dir = tmp_path / "fillibusters"
-    _write_fillibuster_fixture(fillibusters_dir, "a", "Filler sentence one.")
-
-    def slow_chat_stream(messages, *, model="hermes3:8b"):
-        time.sleep(0.7)  # comfortably past _FILLER_START_DELAY_S (0.4s)
-        yield "Real reply."
-
-    client = _client(
-        embed_fn=_fake_embed_fn,
-        chat_stream_fn=slow_chat_stream,
-        build_narrator_agent_fn=lambda cast_file: _FakeSynthAgent(),
-        fillibusters_dir=fillibusters_dir,
-    )
-    start = client.post(
-        "/api/session/start",
-        headers=_headers(),
-        json={"m4b": str(m4b_path), "cast": str(cast_path), "fillibuster_ids": ["a"]},
-    )
-    session_id = start.json()["session_id"]
-
-    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
-        ws.send_json({"type": "chat", "text": "hi"})
-        received = []
-        while True:
-            msg = ws.receive_json()
-            received.append(msg)
-            if msg["type"] == "answer":
-                break
-
-    types = [m["type"] for m in received]
-    assert "filler_audio_chunk" in types
-    assert types[-1] == "answer"
-    # Once real audio starts, filler must not resume -- it's a stand-in for
-    # the wait, not something that plays alongside the real reply.
-    first_real_audio = types.index("audio_chunk")
-    assert "filler_audio_chunk" not in types[first_real_audio:]
-
-
-class _TextVaryingSynthAgent:
-    """Like _FakeSynthAgent, but its output actually depends on the input
-    text (length-keyed) -- proves distinct fillibuster sentences really get
-    synthesized and sent, not the same clip repeated."""
-
-    sample_rate = 8000
-
-    def use_voice_state(self, voice, state) -> None:
-        pass
-
-    def synthesize(self, text: str):
-        import numpy as np
-
-        return np.full(50, len(text) % 256, dtype=np.int16)
-
-    def stream_chunks(self, text: str):
-        yield self.synthesize(text)
-
-
-def test_ws_chat_streams_multiple_distinct_fillibuster_sentences_back_to_back(tmp_path: Path) -> None:
-    """Regression test for the one-ahead prefetch restructure in
-    _filler_loop (mirrors LookaheadRenderer/_drain_chapters's "keep the
-    next one ready" pattern) -- with a fillibuster script long enough for
-    several sentences and a long enough wait, playback should read through
-    them in order, not stall or repeat the same sentence's synthesis
-    forever."""
-    m4b_path, cast_path = _setup_session_fixture(tmp_path)
-    fillibusters_dir = tmp_path / "fillibusters"
-    _write_fillibuster_fixture(
-        fillibusters_dir,
-        "a",
-        "First filler sentence here. Second filler sentence, noticeably longer than the first one.",
-    )
-
-    def slow_chat_stream(messages, *, model="hermes3:8b"):
-        time.sleep(1.0)  # comfortably past a few filler rotations
-        yield "Real reply."
-
-    client = _client(
-        embed_fn=_fake_embed_fn,
-        chat_stream_fn=slow_chat_stream,
-        build_narrator_agent_fn=lambda cast_file: _TextVaryingSynthAgent(),
-        fillibusters_dir=fillibusters_dir,
-    )
-    start = client.post(
-        "/api/session/start",
-        headers=_headers(),
-        json={"m4b": str(m4b_path), "cast": str(cast_path), "fillibuster_ids": ["a"]},
-    )
-    session_id = start.json()["session_id"]
-
-    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
-        ws.send_json({"type": "chat", "text": "hi"})
-        received = []
-        while True:
-            msg = ws.receive_json()
-            received.append(msg)
-            if msg["type"] == "answer":
-                break
-
-    filler_payloads = [m["data"] for m in received if m["type"] == "filler_audio_chunk"]
-    assert len(filler_payloads) >= 2
-    assert len(set(filler_payloads)) >= 2  # both distinct sentences actually streamed, not one repeated
 
 
 class _FakeKeepWarmHandle:
@@ -1814,6 +1728,36 @@ def _receive_until(ws, expected_type: str, max_messages: int = 10) -> dict:
         if message["type"] == expected_type:
             return message
     raise AssertionError(f"Never received a {expected_type!r} message within {max_messages} messages")
+
+
+def test_session_start_with_quiz_path_uses_transcripts_quiz_checkpoints(tmp_path: Path) -> None:
+    # A pre-rendered m4b's transcript.json carries quiz_checkpoints straight
+    # from render time (see transcript.py/render.py) -- no live script
+    # re-parse needed at session-start, unlike session_start_live.
+    transcript = _fixture_transcript_for_rag()
+    transcript.quiz_checkpoints = {"0.1.0": "q1"}
+    m4b_path = tmp_path / "book.m4b"
+    save_transcript(transcript, m4b_path.with_suffix(".transcript.json"))
+    cast_path = tmp_path / "book.cast.yaml"
+    save_cast(CastFile(book_title="Fixture", entries=[]), cast_path)
+    quiz_path = _write_quiz_file(tmp_path)
+
+    def chat_stream_fn(messages, *, model="hermes3:8b"):
+        yield "unused"
+
+    client = _client(embed_fn=_fake_embed_fn, chat_stream_fn=chat_stream_fn)
+    start = client.post(
+        "/api/session/start",
+        headers=_headers(),
+        json={"m4b": str(m4b_path), "cast": str(cast_path), "mode": "learning", "quiz_path": str(quiz_path)},
+    )
+    session_id = start.json()["session_id"]
+
+    with client.websocket_connect(f"/api/session/{session_id}/ws?token={TOKEN}") as ws:
+        ws.send_json({"type": "position", "span_id": "0.1.0"})
+        awaiting = _receive_until(ws, "awaiting_input")
+
+    assert awaiting["choices"] == {"A": "A user", "B": "A delegated identity"}
 
 
 def test_session_start_live_with_quiz_path_merges_script_quiz_checkpoints(tmp_path: Path) -> None:

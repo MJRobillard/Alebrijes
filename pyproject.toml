@@ -50,4 +50,4 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-alebrijes = ["frontend/*.html", "llm/*.md", "fillibusters/*.txt", "fillibusters/*.yaml"]
+alebrijes = ["frontend/*.html", "llm/*.md", "fillibusters/*.m4b", "fillibusters/*.transcript.json", "fillibusters/*.quiz.yaml", "fillibusters/README.md"]
