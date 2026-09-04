@@ -3,11 +3,13 @@ name: checkpoint-author
 description: >-
   Converts a source study document plus a set of practice questions into an
   Alebrijes interactive-narration script (NAME: text lines, # chapter
-  headings, QUIZ: markers) and its companion <name>.quiz.yaml. Use when the
-  user wants to turn study material (e.g. AWS/technical notes) and practice
-  questions into a lesson-mode Alebrijes book, or asks to "author
-  checkpoints", "place quiz markers", or "preprocess a script" for
-  interactive narration.
+  headings, QUIZ: markers) and its companion <name>.quiz.yaml, with each
+  question placed at the true end of its chapter -- the point where
+  playback is already idle between chapters, so the frontend just asks it
+  there, no mid-chapter interruption logic needed. Use when the user wants
+  to turn study material (e.g. AWS/technical notes) and practice questions
+  into a chapter-quiz Alebrijes book, or asks to "author checkpoints",
+  "place quiz markers", or "preprocess a script" for interactive narration.
 ---
 
 # Checkpoint Author
@@ -24,10 +26,11 @@ exist and are already parsed by the app.
   and which single letter is correct. Optional per-question praise line for
   a correct answer. (Multi-select answers aren't supported by the current
   grading code — never emit more than one correct letter.)
-- Optional granularity: `chapter` (default — at most one checkpoint per
-  chapter, near its end) or `dense` (a checkpoint after roughly every
-  significant subsection). Ask if unclear and it matters for the doc's
-  length.
+
+One checkpoint per chapter, always at the chapter's true end (see
+Placement) — this isn't a tunable granularity. If there are more questions
+than natural chapter divisions in the source doc, split the doc into more
+chapters rather than stacking multiple questions into one chapter.
 
 If the user hasn't supplied the source doc or the questions inline, ask for
 them — don't invent either.
@@ -72,17 +75,24 @@ questions:
 One entry per question the script references via `QUIZ: <id>` — ids must
 match exactly, letter-for-letter.
 
-## Placement
+## Placement — always the chapter's true last line
+
+Every `QUIZ:` marker goes immediately after the **last** `NARRATOR:` (or
+other speaker) line of its chapter — the line directly before the next `#`
+heading, or the last line of the file for the final chapter. Never mid-
+chapter. This is the whole point of this format: a chapter boundary is
+already a natural pause (nothing else is playing), so the frontend can just
+ask the question there with no interrupt/resume machinery — a mid-chapter
+placement would need that machinery and defeats the design.
 
 No foreshadowing requirement — a question doesn't need to be directly
-answered by the exact passage it's attached to; inference is part of the
-intended learning experience. Place each question at a chapter/section
-boundary that's topically related to it, and be able to say what passage or
-section title grounded that placement if asked — but don't force an exact
-match if there's no clean one; a topically-adjacent placement is fine.
+answered by the chapter it's attached to; inference is part of the intended
+learning experience. Pick whichever chapter is topically closest to the
+question and be able to say why if asked, but the *position* within that
+chapter is never a judgment call — always the last line, no exceptions.
 
-Every input question must be placed exactly once. Never drop a question,
-never duplicate one across two checkpoints.
+One question per chapter (see Inputs). Every input question must be placed
+exactly once — never dropped, never duplicated across two checkpoints.
 
 ## Self-check before finishing
 
@@ -101,9 +111,21 @@ questions = load_quiz(Path("<quiz.yaml output path>"))
 assert book.quiz_checkpoints, "no QUIZ markers were placed"
 for span_id, question_id in book.quiz_checkpoints.items():
     assert question_id in questions, f"{span_id} points at missing question {question_id!r}"
+    # Must be the chapter's true last line -- the whole point of this
+    # format (see Placement, above).
+    chapter_index, paragraph_index, _ = span_id.split(".")
+    chapter = book.chapters[int(chapter_index)]
+    last_index = chapter.paragraphs[-1].index
+    assert int(paragraph_index) == last_index, (
+        f"{span_id} isn't the last line of chapter {chapter_index} "
+        f"(last is index {last_index}) -- move the QUIZ marker there"
+    )
 
 placed_ids = set(book.quiz_checkpoints.values())
 assert placed_ids == set(questions), "every input question must be placed exactly once, no drops/dupes"
+
+chapters_used = [span_id.split(".")[0] for span_id in book.quiz_checkpoints]
+assert len(chapters_used) == len(set(chapters_used)), "at most one checkpoint per chapter"
 ```
 
 If this raises anything, fix the output and re-run — don't hand back a

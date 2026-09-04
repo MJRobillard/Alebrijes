@@ -63,6 +63,24 @@ def test_every_input_question_was_placed_exactly_once() -> None:
     assert len(placed_ids) == len(set(placed_ids)), "no question should be placed at more than one checkpoint"
 
 
+def test_every_checkpoint_is_the_true_last_line_of_its_chapter() -> None:
+    """The whole point of this format: a chapter boundary is already an
+    idle pause, so the frontend can just ask the question there with no
+    mid-chapter interrupt/resume logic. A checkpoint anywhere but the last
+    line defeats that."""
+    book = parse(SCRIPT_PATH)
+
+    for span_id in book.quiz_checkpoints:
+        chapter_index, paragraph_index, _ = span_id.split(".")
+        chapter = book.chapters[int(chapter_index)]
+        assert int(paragraph_index) == chapter.paragraphs[-1].index, (
+            f"{span_id} is not the last line of chapter {chapter_index}"
+        )
+
+    chapters_used = [span_id.split(".")[0] for span_id in book.quiz_checkpoints]
+    assert len(chapters_used) == len(set(chapters_used)), "at most one checkpoint per chapter"
+
+
 def test_quiz_yaml_matches_input_question_content() -> None:
     """The skill's job is placement, not rewriting the questions -- prompt,
     options, and the correct answer should come through unchanged."""
