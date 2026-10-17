@@ -54,3 +54,19 @@ def test_mixed_paragraph_preserves_order_and_text() -> None:
     assert kinds == [SpanKind.NARRATION, SpanKind.DIALOGUE, SpanKind.NARRATION]
     assert spans[1].text == "This is the Waning Forest."
     assert all(s.chapter_index == 1 and s.paragraph_index == 2 for s in spans)
+
+
+def test_paragraph_opening_quote_is_dialogue_without_a_speech_tag() -> None:
+    paragraph = Paragraph(text='"Then we shall have to go without him."', index=0)
+
+    spans = segment_paragraph(paragraph, chapter_index=0)
+
+    assert [s.kind for s in spans] == [SpanKind.DIALOGUE]
+
+
+def test_mid_paragraph_quote_without_tag_is_still_narration() -> None:
+    paragraph = Paragraph(text='The sign over the door read "Closed for the season" in faded paint.', index=0)
+
+    spans = segment_paragraph(paragraph, chapter_index=0)
+
+    assert all(s.kind == SpanKind.NARRATION for s in spans)

@@ -1,0 +1,23 @@
+{
+  "deepseek-flash (whole novel)": {
+    "quotations": 38,
+    "speaker_accuracy": 1.0
+  },
+  "qwen2.5:1.5b-instruct": {
+    "quotations": 38,
+    "speaker_accuracy": 0.6316,
+    "speaker_accuracy_by_type": {
+      "Anaphoric": 0.8333,
+      "Explicit": 0.6,
+      "Implicit": 0.5926
+    },
+    "agrees_with_deepseek": 0.6316,
+    "answer_token_f1": 0.2862,
+    "answer_token_f1_evidence_in_passage": 0.2826,
+    "evidence_in_passage_rate": 0.8684,
+    "mean_seconds_per_quote": 8.04,
+    "mean_prompt_eval_seconds": 3.76,
+    "wall_seconds": 305.6,
+    "timed_out": false
+  }
+}

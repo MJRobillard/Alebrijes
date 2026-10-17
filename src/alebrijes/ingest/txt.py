@@ -25,7 +25,10 @@ from pathlib import Path
 
 from alebrijes.ingest import Book, Chapter, Paragraph
 
-_CHAPTER_HEADER_RE = re.compile(r"^\s*(?:chapter|chap\.?)\s*(\d+)\b|^\s*(\d+)\s*[:.]\s+", re.IGNORECASE)
+# Arabic or Roman chapter numbers -- Project Gutenberg texts overwhelmingly
+# use "CHAPTER I." (found by evals/attribution: all 28 PDNC novels parsed as
+# a single chapter before Roman numerals were accepted).
+_CHAPTER_HEADER_RE = re.compile(r"^\s*(?:chapter|chap\.?)\s*(\d+|[ivxlcdm]+)\b|^\s*(\d+)\s*[:.]\s+", re.IGNORECASE)
 _MAX_HEADING_LENGTH = 60
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])(?:[\]\)\"]+)?\s+")
 _MIN_SENTENCES_PER_PARAGRAPH = 5

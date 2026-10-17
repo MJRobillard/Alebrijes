@@ -111,3 +111,21 @@ def test_narration_spans_are_never_attributed() -> None:
 
     assert len(attributions) == 1
     assert attributions[0].span.kind == SpanKind.DIALOGUE
+
+
+def test_titled_name_keeps_its_title() -> None:
+    # A bare "Bennet" would merge Mr. and Mrs. Bennet into one cast entry.
+    spans = [_dialogue("Have you heard the news?"), _narration("said Mrs. Bennet.")]
+
+    [attribution] = RuleBasedAttributor().attribute(spans)
+
+    assert attribution.character == "Mrs. Bennet"
+    assert attribution.confidence >= 0.8
+
+
+def test_common_noun_subject_is_not_cast_as_a_character() -> None:
+    spans = [_narration("Audrey walked in."), _dialogue("Where have you been?"), _narration("cried his wife.")]
+
+    [attribution] = RuleBasedAttributor().attribute(spans)
+
+    assert attribution.character != "wife"

@@ -1,0 +1,23 @@
+{
+  "quotations": 640,
+  "speaker_accuracy": 1.0,
+  "speaker_accuracy_by_type": {
+    "Anaphoric": 1.0,
+    "Explicit": 1.0,
+    "Implicit": 1.0
+  },
+  "unknown": 0,
+  "invalid": 0,
+  "addressee_any_overlap": 0.9609,
+  "qa_pairs": 640,
+  "evidence_verbatim_rate": 0.9719,
+  "usage_this_run": {
+    "requests": 17,
+    "cache_hit": 982014,
+    "cache_miss": 74645,
+    "output": 160341,
+    "reasoning": 110034,
+    "usd": 0.1103
+  },
+  "wall_seconds_this_run": 237.3
+}

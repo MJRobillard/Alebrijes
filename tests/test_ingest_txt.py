@@ -81,3 +81,13 @@ def test_parse_raises_clear_error_for_empty_file(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="No extractable text"):
         parse(txt_path)
+
+
+def test_parse_detects_roman_numeral_chapter_headings(tmp_path: Path) -> None:
+    book_path = tmp_path / "book.txt"
+    book_path.write_text("CHAPTER I.\n\nSome narration.\n\nCHAPTER II.\n\nMore narration.\n", encoding="utf-8")
+
+    book = parse(book_path)
+
+    assert len(book.chapters) == 2
+    assert [p.text for p in book.chapters[1].paragraphs] == ["CHAPTER II.", "More narration."]

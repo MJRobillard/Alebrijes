@@ -62,6 +62,8 @@ _SPEECH_LEMMAS = {
 
 _PRONOUN_SUBJECTS = {"he", "she", "they", "i", "we"}
 
+_TITLES = {"mr", "mrs", "miss", "ms", "dr", "sir", "lady", "lord", "colonel", "captain", "aunt", "uncle"}
+
 UNKNOWN = "Unknown"
 
 _NAMED_CONFIDENCE = 0.9
@@ -82,25 +84,51 @@ def _nlp():
         ) from exc
 
 
+def _full_name(token) -> str:
+    """Expand a name's head token to its compound modifiers, so "Mrs. Bennet
+    said" yields "Mrs. Bennet", not "Bennet" -- which would merge Mr. and Mrs.
+    Bennet into one cast entry (found by evals/attribution/run_pdnc.py)."""
+    parts = [t for t in token.lefts if t.dep_ in ("compound", "flat")] + [token]
+    return " ".join(t.text for t in parts)
+
+
 def _speech_verb_subject(text: str) -> str | None:
     """Return who a speech verb's syntactic subject names, if any.
 
     Handles both "Colin said" and "said Colin" — the dependency parse finds
     the verb's nsubj regardless of word order, unlike proximity/regex.
+    Returns a full proper name, or a bare pronoun from `_PRONOUN_SUBJECTS`
+    for the caller to resolve. A common-noun subject ("cried his wife",
+    "her mother said") names nobody this attributor can resolve, so it's
+    skipped rather than cast as a character called "wife".
     """
     doc = _nlp()(text)
     for token in doc:
         if token.pos_ != "VERB" or token.lemma_ not in _SPEECH_LEMMAS:
             continue
         for child in token.children:
-            if child.dep_ in ("nsubj", "nsubjpass"):
+            if child.dep_ not in ("nsubj", "nsubjpass"):
+                continue
+            if child.text.lower() in _PRONOUN_SUBJECTS:
                 return child.text
+            if child.pos_ == "PROPN":
+                return _full_name(child)
     return None
 
 
 def _person_entities(text: str) -> list[str]:
+    """PERSON entities, with a directly preceding title kept ("Mrs. Bennet",
+    not spaCy's bare "Bennet") for the same reason as `_full_name`."""
     doc = _nlp()(text)
-    return [ent.text for ent in doc.ents if ent.label_ == "PERSON"]
+    people = []
+    for ent in doc.ents:
+        if ent.label_ != "PERSON":
+            continue
+        start = ent.start
+        if start > 0 and doc[start - 1].text.rstrip(".").lower() in _TITLES:
+            start -= 1
+        people.append(doc[start : ent.end].text)
+    return people
 
 
 class RuleBasedAttributor:

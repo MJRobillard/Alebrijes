@@ -1,0 +1,1820 @@
+{
+  "overall": {
+    "counts": {
+      "gold": 48803,
+      "detected": 40353,
+      "unknown": 3297,
+      "flagged_for_review": 22623,
+      "correct": 15515,
+      "auto_accepted": 17730,
+      "auto_accepted_correct": 10069,
+      "wrong": 21219,
+      "ambiguous": 322
+    },
+    "by_tier": {
+      "unknown (0.0)": {
+        "n": 3297,
+        "unknown": 3297
+      },
+      "named speech-verb subject (0.9)": {
+        "n": 9685,
+        "correct": 7358,
+        "wrong": 2204,
+        "ambiguous": 123
+      },
+      "pronoun -> last mention (0.55)": {
+        "n": 8045,
+        "correct": 2711,
+        "wrong": 5265,
+        "ambiguous": 69
+      },
+      "turn alternation (0.35)": {
+        "n": 19326,
+        "wrong": 13750,
+        "correct": 5446,
+        "ambiguous": 130
+      }
+    },
+    "by_quote_type": {
+      "Implicit": {
+        "gold": 16713,
+        "detected": 14274,
+        "unknown": 1892,
+        "wrong": 8778,
+        "correct": 3509,
+        "ambiguous": 95
+      },
+      "Explicit": {
+        "gold": 17802,
+        "detected": 14573,
+        "correct": 8713,
+        "wrong": 4941,
+        "ambiguous": 148,
+        "unknown": 771
+      },
+      "Anaphoric": {
+        "gold": 14260,
+        "detected": 11488,
+        "correct": 3287,
+        "unknown": 633,
+        "wrong": 7489,
+        "ambiguous": 79
+      },
+      "nan": {
+        "gold": 14,
+        "detected": 8,
+        "correct": 3,
+        "wrong": 4,
+        "unknown": 1
+      },
+      "": {
+        "gold": 14,
+        "detected": 10,
+        "correct": 3,
+        "wrong": 7
+      }
+    }
+  },
+  "novels": {
+    "AHandfulOfDust": {
+      "counts": {
+        "gold": 2617,
+        "detected": 2184,
+        "unknown": 57,
+        "flagged_for_review": 1455,
+        "correct": 807,
+        "auto_accepted": 729,
+        "auto_accepted_correct": 428,
+        "wrong": 1315,
+        "ambiguous": 5
+      },
+      "by_tier": {
+        "unknown (0.0)": {
+          "n": 57,
+          "unknown": 57
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 442,
+          "correct": 326,
+          "wrong": 113,
+          "ambiguous": 3
+        },
+        "pronoun -> last mention (0.55)": {
+          "n": 287,
+          "correct": 102,
+          "wrong": 185
+        },
+        "turn alternation (0.35)": {
+          "n": 1398,
+          "wrong": 1017,
+          "correct": 379,
+          "ambiguous": 2
+        }
+      },
+      "by_quote_type": {
+        "Implicit": {
+          "gold": 1727,
+          "detected": 1462,
+          "unknown": 51,
+          "wrong": 1014,
+          "correct": 395,
+          "ambiguous": 2
+        },
+        "Explicit": {
+          "gold": 575,
+          "detected": 475,
+          "correct": 327,
+          "wrong": 141,
+          "ambiguous": 3,
+          "unknown": 4
+        },
+        "Anaphoric": {
+          "gold": 315,
+          "detected": 247,
+          "correct": 85,
+          "unknown": 2,
+          "wrong": 160
+        }
+      },
+      "chapters_detected": 7,
+      "seconds": 17.6
+    },
+    "APassageToIndia": {
+      "counts": {
+        "gold": 2398,
+        "detected": 2108,
+        "unknown": 299,
+        "flagged_for_review": 1384,
+        "correct": 537,
+        "auto_accepted": 724,
+        "auto_accepted_correct": 309,
+        "wrong": 1258,
+        "ambiguous": 14
+      },
+      "by_tier": {
+        "unknown (0.0)": {
+          "n": 299,
+          "unknown": 299
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 291,
+          "correct": 195,
+          "wrong": 91,
+          "ambiguous": 5
+        },
+        "turn alternation (0.35)": {
+          "n": 1085,
+          "wrong": 853,
+          "correct": 228,
+          "ambiguous": 4
+        },
+        "pronoun -> last mention (0.55)": {
+          "n": 433,
+          "correct": 114,
+          "wrong": 314,
+          "ambiguous": 5
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 691,
+          "detected": 586,
+          "unknown": 46,
+          "correct": 128,
+          "wrong": 407,
+          "ambiguous": 5
+        },
+        "Implicit": {
+          "gold": 1300,
+          "detected": 1158,
+          "unknown": 225,
+          "correct": 210,
+          "wrong": 719,
+          "ambiguous": 4
+        },
+        "Explicit": {
+          "gold": 407,
+          "detected": 364,
+          "unknown": 28,
+          "correct": 199,
+          "wrong": 132,
+          "ambiguous": 5
+        }
+      },
+      "chapters_detected": 37,
+      "seconds": 21.0
+    },
+    "ARoomWithAView": {
+      "counts": {
+        "gold": 1989,
+        "detected": 1639,
+        "correct": 394,
+        "auto_accepted": 608,
+        "auto_accepted_correct": 225,
+        "wrong": 1153,
+        "flagged_for_review": 1031,
+        "unknown": 83,
+        "ambiguous": 9
+      },
+      "by_tier": {
+        "named speech-verb subject (0.9)": {
+          "n": 344,
+          "correct": 183,
+          "wrong": 161
+        },
+        "turn alternation (0.35)": {
+          "n": 948,
+          "wrong": 773,
+          "correct": 169,
+          "ambiguous": 6
+        },
+        "pronoun -> last mention (0.55)": {
+          "n": 264,
+          "wrong": 219,
+          "correct": 42,
+          "ambiguous": 3
+        },
+        "unknown (0.0)": {
+          "n": 83,
+          "unknown": 83
+        }
+      },
+      "by_quote_type": {
+        "Explicit": {
+          "gold": 535,
+          "detected": 437,
+          "correct": 210,
+          "wrong": 217,
+          "unknown": 10
+        },
+        "Implicit": {
+          "gold": 905,
+          "detected": 772,
+          "wrong": 595,
+          "correct": 117,
+          "unknown": 57,
+          "ambiguous": 3
+        },
+        "Anaphoric": {
+          "gold": 547,
+          "detected": 430,
+          "wrong": 341,
+          "correct": 67,
+          "unknown": 16,
+          "ambiguous": 6
+        },
+        "nan": {
+          "gold": 2
+        }
+      },
+      "chapters_detected": 18,
+      "seconds": 14.7
+    },
+    "AlicesAdventuresInWonderland": {
+      "counts": {
+        "gold": 1048,
+        "detected": 830,
+        "unknown": 59,
+        "flagged_for_review": 255,
+        "correct": 507,
+        "auto_accepted": 575,
+        "auto_accepted_correct": 436,
+        "wrong": 259,
+        "ambiguous": 5
+      },
+      "by_tier": {
+        "unknown (0.0)": {
+          "n": 59,
+          "unknown": 59
+        },
+        "pronoun -> last mention (0.55)": {
+          "n": 91,
+          "correct": 60,
+          "wrong": 31
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 484,
+          "correct": 376,
+          "wrong": 104,
+          "ambiguous": 4
+        },
+        "turn alternation (0.35)": {
+          "n": 196,
+          "correct": 71,
+          "wrong": 124,
+          "ambiguous": 1
+        }
+      },
+      "by_quote_type": {
+        "Explicit": {
+          "gold": 882,
+          "detected": 723,
+          "unknown": 39,
+          "correct": 457,
+          "wrong": 222,
+          "ambiguous": 5
+        },
+        "Anaphoric": {
+          "gold": 156,
+          "detected": 99,
+          "correct": 49,
+          "unknown": 14,
+          "wrong": 36
+        },
+        "Implicit": {
+          "gold": 10,
+          "detected": 8,
+          "unknown": 6,
+          "wrong": 1,
+          "correct": 1
+        }
+      },
+      "chapters_detected": 12,
+      "seconds": 8.0
+    },
+    "AnneOfGreenGables": {
+      "counts": {
+        "gold": 1779,
+        "detected": 1588,
+        "unknown": 126,
+        "flagged_for_review": 801,
+        "correct": 832,
+        "auto_accepted": 787,
+        "auto_accepted_correct": 570,
+        "wrong": 630
+      },
+      "by_tier": {
+        "unknown (0.0)": {
+          "n": 126,
+          "unknown": 126
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 580,
+          "correct": 484,
+          "wrong": 96
+        },
+        "pronoun -> last mention (0.55)": {
+          "n": 207,
+          "correct": 86,
+          "wrong": 121
+        },
+        "turn alternation (0.35)": {
+          "n": 675,
+          "wrong": 413,
+          "correct": 262
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 307,
+          "detected": 270,
+          "unknown": 13,
+          "correct": 103,
+          "wrong": 154
+        },
+        "Explicit": {
+          "gold": 1092,
+          "detected": 984,
+          "correct": 607,
+          "wrong": 303,
+          "unknown": 74
+        },
+        "Implicit": {
+          "gold": 379,
+          "detected": 334,
+          "wrong": 173,
+          "unknown": 39,
+          "correct": 122
+        },
+        "nan": {
+          "gold": 1
+        }
+      },
+      "chapters_detected": 38,
+      "seconds": 14.9
+    },
+    "DaisyMiller": {
+      "counts": {
+        "gold": 725,
+        "detected": 585,
+        "wrong": 259,
+        "auto_accepted": 364,
+        "correct": 326,
+        "auto_accepted_correct": 241,
+        "flagged_for_review": 221
+      },
+      "by_tier": {
+        "pronoun -> last mention (0.55)": {
+          "n": 148,
+          "wrong": 77,
+          "correct": 71
+        },
+        "turn alternation (0.35)": {
+          "n": 221,
+          "wrong": 136,
+          "correct": 85
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 216,
+          "correct": 170,
+          "wrong": 46
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 282,
+          "detected": 222,
+          "wrong": 119,
+          "correct": 103
+        },
+        "Implicit": {
+          "gold": 116,
+          "detected": 90,
+          "wrong": 63,
+          "correct": 27
+        },
+        "Explicit": {
+          "gold": 327,
+          "detected": 273,
+          "correct": 196,
+          "wrong": 77
+        }
+      },
+      "chapters_detected": 1,
+      "seconds": 5.6
+    },
+    "Emma": {
+      "counts": {
+        "gold": 2109,
+        "detected": 1763,
+        "wrong": 815,
+        "auto_accepted": 601,
+        "unknown": 319,
+        "flagged_for_review": 1162,
+        "correct": 629,
+        "auto_accepted_correct": 363
+      },
+      "by_tier": {
+        "pronoun -> last mention (0.55)": {
+          "n": 300,
+          "wrong": 197,
+          "correct": 103
+        },
+        "unknown (0.0)": {
+          "n": 319,
+          "unknown": 319
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 301,
+          "correct": 260,
+          "wrong": 41
+        },
+        "turn alternation (0.35)": {
+          "n": 843,
+          "correct": 266,
+          "wrong": 577
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 560,
+          "detected": 462,
+          "wrong": 293,
+          "unknown": 55,
+          "correct": 114
+        },
+        "Implicit": {
+          "gold": 865,
+          "detected": 739,
+          "unknown": 194,
+          "correct": 186,
+          "wrong": 359
+        },
+        "Explicit": {
+          "gold": 684,
+          "detected": 562,
+          "unknown": 70,
+          "correct": 329,
+          "wrong": 163
+        }
+      },
+      "chapters_detected": 55,
+      "seconds": 19.5
+    },
+    "HardTimes": {
+      "counts": {
+        "gold": 2413,
+        "detected": 1985,
+        "unknown": 172,
+        "flagged_for_review": 1020,
+        "correct": 934,
+        "auto_accepted": 965,
+        "auto_accepted_correct": 634,
+        "wrong": 876,
+        "ambiguous": 3
+      },
+      "by_tier": {
+        "unknown (0.0)": {
+          "n": 172,
+          "unknown": 172
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 735,
+          "correct": 527,
+          "wrong": 208
+        },
+        "turn alternation (0.35)": {
+          "n": 848,
+          "wrong": 545,
+          "correct": 300,
+          "ambiguous": 3
+        },
+        "pronoun -> last mention (0.55)": {
+          "n": 230,
+          "correct": 107,
+          "wrong": 123
+        }
+      },
+      "by_quote_type": {
+        "Implicit": {
+          "gold": 566,
+          "detected": 505,
+          "unknown": 77,
+          "wrong": 262,
+          "correct": 166
+        },
+        "Explicit": {
+          "gold": 1334,
+          "detected": 1093,
+          "correct": 651,
+          "wrong": 386,
+          "unknown": 53,
+          "ambiguous": 3
+        },
+        "Anaphoric": {
+          "gold": 513,
+          "detected": 387,
+          "unknown": 42,
+          "wrong": 228,
+          "correct": 117
+        }
+      },
+      "chapters_detected": 37,
+      "seconds": 19.6
+    },
+    "HowardsEnd": {
+      "counts": {
+        "gold": 3111,
+        "detected": 2640,
+        "unknown": 273,
+        "flagged_for_review": 1705,
+        "correct": 819,
+        "auto_accepted": 935,
+        "auto_accepted_correct": 476,
+        "wrong": 1548
+      },
+      "by_tier": {
+        "unknown (0.0)": {
+          "n": 273,
+          "unknown": 273
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 523,
+          "correct": 349,
+          "wrong": 174
+        },
+        "pronoun -> last mention (0.55)": {
+          "n": 412,
+          "wrong": 285,
+          "correct": 127
+        },
+        "turn alternation (0.35)": {
+          "n": 1432,
+          "wrong": 1089,
+          "correct": 343
+        }
+      },
+      "by_quote_type": {
+        "Implicit": {
+          "gold": 1587,
+          "detected": 1375,
+          "unknown": 186,
+          "wrong": 905,
+          "correct": 284
+        },
+        "Explicit": {
+          "gold": 855,
+          "detected": 718,
+          "correct": 391,
+          "wrong": 282,
+          "unknown": 45
+        },
+        "Anaphoric": {
+          "gold": 667,
+          "detected": 545,
+          "wrong": 360,
+          "correct": 143,
+          "unknown": 42
+        },
+        "nan": {
+          "gold": 2,
+          "detected": 2,
+          "correct": 1,
+          "wrong": 1
+        }
+      },
+      "chapters_detected": 44,
+      "seconds": 22.2
+    },
+    "MansfieldPark": {
+      "counts": {
+        "gold": 1568,
+        "detected": 1341,
+        "correct": 497,
+        "auto_accepted": 590,
+        "auto_accepted_correct": 359,
+        "wrong": 644,
+        "flagged_for_review": 751,
+        "unknown": 182,
+        "ambiguous": 18
+      },
+      "by_tier": {
+        "pronoun -> last mention (0.55)": {
+          "n": 267,
+          "correct": 87,
+          "wrong": 178,
+          "ambiguous": 2
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 323,
+          "correct": 272,
+          "wrong": 44,
+          "ambiguous": 7
+        },
+        "turn alternation (0.35)": {
+          "n": 569,
+          "wrong": 422,
+          "correct": 138,
+          "ambiguous": 9
+        },
+        "unknown (0.0)": {
+          "n": 182,
+          "unknown": 182
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 392,
+          "detected": 316,
+          "correct": 90,
+          "wrong": 200,
+          "unknown": 24,
+          "ambiguous": 2
+        },
+        "Explicit": {
+          "gold": 649,
+          "detected": 540,
+          "correct": 316,
+          "wrong": 174,
+          "ambiguous": 11,
+          "unknown": 39
+        },
+        "Implicit": {
+          "gold": 527,
+          "detected": 485,
+          "wrong": 270,
+          "unknown": 119,
+          "correct": 91,
+          "ambiguous": 5
+        }
+      },
+      "chapters_detected": 48,
+      "seconds": 19.4
+    },
+    "NightAndDay": {
+      "counts": {
+        "gold": 2795,
+        "detected": 2488,
+        "correct": 1174,
+        "auto_accepted": 1677,
+        "auto_accepted_correct": 916,
+        "unknown": 61,
+        "flagged_for_review": 811,
+        "wrong": 1199,
+        "ambiguous": 54
+      },
+      "by_tier": {
+        "named speech-verb subject (0.9)": {
+          "n": 656,
+          "correct": 472,
+          "wrong": 175,
+          "ambiguous": 9
+        },
+        "pronoun -> last mention (0.55)": {
+          "n": 1021,
+          "correct": 444,
+          "wrong": 554,
+          "ambiguous": 23
+        },
+        "unknown (0.0)": {
+          "n": 61,
+          "unknown": 61
+        },
+        "turn alternation (0.35)": {
+          "n": 750,
+          "wrong": 470,
+          "correct": 258,
+          "ambiguous": 22
+        }
+      },
+      "by_quote_type": {
+        "Explicit": {
+          "gold": 995,
+          "detected": 863,
+          "correct": 537,
+          "unknown": 16,
+          "wrong": 293,
+          "ambiguous": 17
+        },
+        "Anaphoric": {
+          "gold": 1427,
+          "detected": 1271,
+          "correct": 511,
+          "unknown": 40,
+          "wrong": 697,
+          "ambiguous": 23
+        },
+        "Implicit": {
+          "gold": 371,
+          "detected": 352,
+          "wrong": 209,
+          "correct": 124,
+          "ambiguous": 14,
+          "unknown": 5
+        },
+        "nan": {
+          "gold": 2,
+          "detected": 2,
+          "correct": 2
+        }
+      },
+      "chapters_detected": 34,
+      "seconds": 35.1
+    },
+    "NorthangerAbbey": {
+      "counts": {
+        "gold": 1014,
+        "detected": 892,
+        "correct": 318,
+        "auto_accepted": 271,
+        "auto_accepted_correct": 161,
+        "unknown": 172,
+        "flagged_for_review": 621,
+        "wrong": 402
+      },
+      "by_tier": {
+        "pronoun -> last mention (0.55)": {
+          "n": 140,
+          "correct": 62,
+          "wrong": 78
+        },
+        "unknown (0.0)": {
+          "n": 172,
+          "unknown": 172
+        },
+        "turn alternation (0.35)": {
+          "n": 449,
+          "correct": 157,
+          "wrong": 292
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 131,
+          "correct": 99,
+          "wrong": 32
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 201,
+          "detected": 155,
+          "correct": 57,
+          "wrong": 87,
+          "unknown": 11
+        },
+        "Explicit": {
+          "gold": 269,
+          "detected": 224,
+          "unknown": 31,
+          "correct": 125,
+          "wrong": 68
+        },
+        "Implicit": {
+          "gold": 544,
+          "detected": 513,
+          "unknown": 130,
+          "correct": 136,
+          "wrong": 247
+        }
+      },
+      "chapters_detected": 31,
+      "seconds": 10.1
+    },
+    "OliverTwist": {
+      "counts": {
+        "gold": 4253,
+        "detected": 3168,
+        "unknown": 129,
+        "flagged_for_review": 2074,
+        "correct": 1492,
+        "auto_accepted": 1094,
+        "auto_accepted_correct": 889,
+        "wrong": 1547
+      },
+      "by_tier": {
+        "unknown (0.0)": {
+          "n": 129,
+          "unknown": 129
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 967,
+          "correct": 838,
+          "wrong": 129
+        },
+        "turn alternation (0.35)": {
+          "n": 1945,
+          "wrong": 1342,
+          "correct": 603
+        },
+        "pronoun -> last mention (0.55)": {
+          "n": 127,
+          "wrong": 76,
+          "correct": 51
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 1649,
+          "detected": 1196,
+          "correct": 326,
+          "wrong": 783,
+          "unknown": 87
+        },
+        "Implicit": {
+          "gold": 138,
+          "detected": 92,
+          "wrong": 50,
+          "correct": 37,
+          "unknown": 5
+        },
+        "Explicit": {
+          "gold": 2466,
+          "detected": 1880,
+          "unknown": 37,
+          "correct": 1129,
+          "wrong": 714
+        }
+      },
+      "chapters_detected": 10,
+      "seconds": 33.8
+    },
+    "Persuasion": {
+      "counts": {
+        "gold": 682,
+        "detected": 577,
+        "correct": 193,
+        "auto_accepted": 204,
+        "auto_accepted_correct": 119,
+        "unknown": 99,
+        "flagged_for_review": 373,
+        "wrong": 276,
+        "ambiguous": 9
+      },
+      "by_tier": {
+        "named speech-verb subject (0.9)": {
+          "n": 108,
+          "correct": 85,
+          "wrong": 18,
+          "ambiguous": 5
+        },
+        "unknown (0.0)": {
+          "n": 99,
+          "unknown": 99
+        },
+        "turn alternation (0.35)": {
+          "n": 274,
+          "correct": 74,
+          "wrong": 198,
+          "ambiguous": 2
+        },
+        "pronoun -> last mention (0.55)": {
+          "n": 96,
+          "wrong": 60,
+          "correct": 34,
+          "ambiguous": 2
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 159,
+          "detected": 127,
+          "unknown": 13,
+          "correct": 35,
+          "wrong": 76,
+          "ambiguous": 3
+        },
+        "Explicit": {
+          "gold": 347,
+          "detected": 285,
+          "correct": 123,
+          "unknown": 65,
+          "wrong": 92,
+          "ambiguous": 5
+        },
+        "nan": {
+          "gold": 1
+        },
+        "Implicit": {
+          "gold": 175,
+          "detected": 165,
+          "unknown": 21,
+          "wrong": 108,
+          "correct": 35,
+          "ambiguous": 1
+        }
+      },
+      "chapters_detected": 24,
+      "seconds": 10.7
+    },
+    "PrideAndPrejudice": {
+      "counts": {
+        "gold": 1708,
+        "detected": 1573,
+        "unknown": 261,
+        "flagged_for_review": 938,
+        "wrong": 726,
+        "auto_accepted": 635,
+        "correct": 586,
+        "auto_accepted_correct": 362
+      },
+      "by_tier": {
+        "unknown (0.0)": {
+          "n": 261,
+          "unknown": 261
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 300,
+          "wrong": 53,
+          "correct": 247
+        },
+        "turn alternation (0.35)": {
+          "n": 677,
+          "wrong": 453,
+          "correct": 224
+        },
+        "pronoun -> last mention (0.55)": {
+          "n": 335,
+          "wrong": 220,
+          "correct": 115
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 507,
+          "detected": 453,
+          "unknown": 44,
+          "wrong": 292,
+          "correct": 117
+        },
+        "Implicit": {
+          "gold": 637,
+          "detected": 620,
+          "unknown": 164,
+          "correct": 161,
+          "wrong": 295
+        },
+        "Explicit": {
+          "gold": 564,
+          "detected": 500,
+          "correct": 308,
+          "wrong": 139,
+          "unknown": 53
+        }
+      },
+      "chapters_detected": 61,
+      "seconds": 15.9
+    },
+    "SenseAndSensibility": {
+      "counts": {
+        "gold": 1543,
+        "detected": 1346,
+        "wrong": 617,
+        "auto_accepted": 650,
+        "unknown": 139,
+        "flagged_for_review": 696,
+        "correct": 586,
+        "auto_accepted_correct": 401,
+        "ambiguous": 4
+      },
+      "by_tier": {
+        "pronoun -> last mention (0.55)": {
+          "n": 315,
+          "wrong": 200,
+          "correct": 115
+        },
+        "unknown (0.0)": {
+          "n": 139,
+          "unknown": 139
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 335,
+          "correct": 286,
+          "wrong": 46,
+          "ambiguous": 3
+        },
+        "turn alternation (0.35)": {
+          "n": 557,
+          "wrong": 371,
+          "correct": 185,
+          "ambiguous": 1
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 430,
+          "detected": 370,
+          "wrong": 231,
+          "unknown": 20,
+          "correct": 119
+        },
+        "Implicit": {
+          "gold": 467,
+          "detected": 430,
+          "unknown": 69,
+          "correct": 113,
+          "wrong": 247,
+          "ambiguous": 1
+        },
+        "Explicit": {
+          "gold": 646,
+          "detected": 546,
+          "unknown": 50,
+          "correct": 354,
+          "wrong": 139,
+          "ambiguous": 3
+        }
+      },
+      "chapters_detected": 50,
+      "seconds": 16.3
+    },
+    "TheAgeOfInnocence": {
+      "counts": {
+        "gold": 1592,
+        "detected": 1232,
+        "unknown": 14,
+        "flagged_for_review": 696,
+        "correct": 348,
+        "auto_accepted": 536,
+        "auto_accepted_correct": 203,
+        "wrong": 837,
+        "ambiguous": 33
+      },
+      "by_tier": {
+        "unknown (0.0)": {
+          "n": 14,
+          "unknown": 14
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 171,
+          "correct": 104,
+          "wrong": 53,
+          "ambiguous": 14
+        },
+        "pronoun -> last mention (0.55)": {
+          "n": 365,
+          "wrong": 263,
+          "correct": 99,
+          "ambiguous": 3
+        },
+        "turn alternation (0.35)": {
+          "n": 682,
+          "wrong": 521,
+          "correct": 145,
+          "ambiguous": 16
+        }
+      },
+      "by_quote_type": {
+        "Explicit": {
+          "gold": 332,
+          "detected": 269,
+          "unknown": 6,
+          "correct": 123,
+          "wrong": 126,
+          "ambiguous": 14
+        },
+        "Anaphoric": {
+          "gold": 681,
+          "detected": 556,
+          "unknown": 5,
+          "wrong": 425,
+          "correct": 116,
+          "ambiguous": 10
+        },
+        "Implicit": {
+          "gold": 579,
+          "detected": 407,
+          "unknown": 3,
+          "wrong": 286,
+          "correct": 109,
+          "ambiguous": 9
+        }
+      },
+      "chapters_detected": 1,
+      "seconds": 20.8
+    },
+    "TheAwakening": {
+      "counts": {
+        "gold": 728,
+        "detected": 640,
+        "unknown": 1,
+        "flagged_for_review": 381,
+        "correct": 250,
+        "auto_accepted": 259,
+        "auto_accepted_correct": 126,
+        "wrong": 389
+      },
+      "by_tier": {
+        "unknown (0.0)": {
+          "n": 1,
+          "unknown": 1
+        },
+        "pronoun -> last mention (0.55)": {
+          "n": 194,
+          "correct": 74,
+          "wrong": 120
+        },
+        "turn alternation (0.35)": {
+          "n": 380,
+          "correct": 124,
+          "wrong": 256
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 65,
+          "wrong": 13,
+          "correct": 52
+        }
+      },
+      "by_quote_type": {
+        "Explicit": {
+          "gold": 202,
+          "detected": 180,
+          "unknown": 1,
+          "wrong": 89,
+          "correct": 90
+        },
+        "Anaphoric": {
+          "gold": 262,
+          "detected": 219,
+          "correct": 82,
+          "wrong": 137
+        },
+        "Implicit": {
+          "gold": 264,
+          "detected": 241,
+          "wrong": 163,
+          "correct": 78
+        }
+      },
+      "chapters_detected": 1,
+      "seconds": 8.6
+    },
+    "TheGambler": {
+      "counts": {
+        "gold": 1066,
+        "detected": 874,
+        "wrong": 661,
+        "auto_accepted": 389,
+        "unknown": 2,
+        "flagged_for_review": 485,
+        "correct": 191,
+        "ambiguous": 20,
+        "auto_accepted_correct": 91
+      },
+      "by_tier": {
+        "pronoun -> last mention (0.55)": {
+          "n": 355,
+          "wrong": 282,
+          "ambiguous": 10,
+          "correct": 63
+        },
+        "unknown (0.0)": {
+          "n": 2,
+          "unknown": 2
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 34,
+          "wrong": 6,
+          "correct": 28
+        },
+        "turn alternation (0.35)": {
+          "n": 483,
+          "wrong": 373,
+          "correct": 100,
+          "ambiguous": 10
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 638,
+          "detected": 516,
+          "wrong": 400,
+          "unknown": 2,
+          "correct": 103,
+          "ambiguous": 11
+        },
+        "Explicit": {
+          "gold": 130,
+          "detected": 92,
+          "wrong": 61,
+          "ambiguous": 3,
+          "correct": 28
+        },
+        "Implicit": {
+          "gold": 297,
+          "detected": 265,
+          "wrong": 199,
+          "ambiguous": 6,
+          "correct": 60
+        },
+        "nan": {
+          "gold": 1,
+          "detected": 1,
+          "wrong": 1
+        }
+      },
+      "chapters_detected": 1,
+      "seconds": 9.4
+    },
+    "TheInvisibleMan": {
+      "counts": {
+        "gold": 1245,
+        "detected": 821,
+        "wrong": 422,
+        "auto_accepted": 514,
+        "flagged_for_review": 307,
+        "correct": 298,
+        "auto_accepted_correct": 252,
+        "unknown": 59,
+        "ambiguous": 42
+      },
+      "by_tier": {
+        "pronoun -> last mention (0.55)": {
+          "n": 165,
+          "wrong": 118,
+          "correct": 46,
+          "ambiguous": 1
+        },
+        "turn alternation (0.35)": {
+          "n": 248,
+          "wrong": 179,
+          "correct": 46,
+          "ambiguous": 23
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 349,
+          "correct": 206,
+          "wrong": 125,
+          "ambiguous": 18
+        },
+        "unknown (0.0)": {
+          "n": 59,
+          "unknown": 59
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 256,
+          "detected": 179,
+          "wrong": 132,
+          "correct": 41,
+          "unknown": 4,
+          "ambiguous": 2
+        },
+        "Explicit": {
+          "gold": 652,
+          "detected": 466,
+          "correct": 223,
+          "wrong": 195,
+          "unknown": 28,
+          "ambiguous": 20
+        },
+        "Implicit": {
+          "gold": 336,
+          "detected": 175,
+          "correct": 34,
+          "wrong": 95,
+          "unknown": 26,
+          "ambiguous": 20
+        },
+        "nan": {
+          "gold": 1,
+          "detected": 1,
+          "unknown": 1
+        }
+      },
+      "chapters_detected": 28,
+      "seconds": 10.1
+    },
+    "TheManWhoWasThursday": {
+      "counts": {
+        "gold": 1351,
+        "detected": 1099,
+        "correct": 543,
+        "auto_accepted": 638,
+        "auto_accepted_correct": 428,
+        "wrong": 496,
+        "flagged_for_review": 461,
+        "unknown": 60
+      },
+      "by_tier": {
+        "pronoun -> last mention (0.55)": {
+          "n": 259,
+          "correct": 109,
+          "wrong": 150
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 379,
+          "correct": 319,
+          "wrong": 60
+        },
+        "turn alternation (0.35)": {
+          "n": 401,
+          "correct": 115,
+          "wrong": 286
+        },
+        "unknown (0.0)": {
+          "n": 60,
+          "unknown": 60
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 462,
+          "detected": 384,
+          "correct": 139,
+          "wrong": 222,
+          "unknown": 23
+        },
+        "Explicit": {
+          "gold": 845,
+          "detected": 688,
+          "correct": 394,
+          "wrong": 258,
+          "unknown": 36
+        },
+        "Implicit": {
+          "gold": 41,
+          "detected": 25,
+          "correct": 10,
+          "wrong": 14,
+          "unknown": 1
+        },
+        "nan": {
+          "gold": 3,
+          "detected": 2,
+          "wrong": 2
+        }
+      },
+      "chapters_detected": 15,
+      "seconds": 10.7
+    },
+    "TheMysteriousAffairAtStyles": {
+      "counts": {
+        "gold": 2212,
+        "detected": 1775,
+        "correct": 499,
+        "auto_accepted": 504,
+        "auto_accepted_correct": 241,
+        "wrong": 1075,
+        "flagged_for_review": 1271,
+        "unknown": 201
+      },
+      "by_tier": {
+        "pronoun -> last mention (0.55)": {
+          "n": 318,
+          "correct": 92,
+          "wrong": 226
+        },
+        "turn alternation (0.35)": {
+          "n": 1070,
+          "correct": 258,
+          "wrong": 812
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 186,
+          "correct": 149,
+          "wrong": 37
+        },
+        "unknown (0.0)": {
+          "n": 201,
+          "unknown": 201
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 542,
+          "detected": 420,
+          "correct": 90,
+          "wrong": 313,
+          "unknown": 17
+        },
+        "Implicit": {
+          "gold": 1268,
+          "detected": 1038,
+          "correct": 233,
+          "wrong": 652,
+          "unknown": 153
+        },
+        "Explicit": {
+          "gold": 402,
+          "detected": 317,
+          "correct": 176,
+          "wrong": 110,
+          "unknown": 31
+        }
+      },
+      "chapters_detected": 13,
+      "seconds": 12.0
+    },
+    "ThePictureOfDorianGray": {
+      "counts": {
+        "gold": 1500,
+        "detected": 1309,
+        "correct": 347,
+        "auto_accepted": 487,
+        "auto_accepted_correct": 174,
+        "wrong": 842,
+        "unknown": 118,
+        "flagged_for_review": 822,
+        "ambiguous": 2
+      },
+      "by_tier": {
+        "named speech-verb subject (0.9)": {
+          "n": 161,
+          "correct": 102,
+          "wrong": 59
+        },
+        "pronoun -> last mention (0.55)": {
+          "n": 326,
+          "wrong": 253,
+          "correct": 72,
+          "ambiguous": 1
+        },
+        "unknown (0.0)": {
+          "n": 118,
+          "unknown": 118
+        },
+        "turn alternation (0.35)": {
+          "n": 704,
+          "correct": 173,
+          "wrong": 530,
+          "ambiguous": 1
+        }
+      },
+      "by_quote_type": {
+        "Explicit": {
+          "gold": 393,
+          "detected": 353,
+          "correct": 145,
+          "unknown": 26,
+          "wrong": 181,
+          "ambiguous": 1
+        },
+        "Anaphoric": {
+          "gold": 520,
+          "detected": 452,
+          "wrong": 339,
+          "unknown": 22,
+          "correct": 90,
+          "ambiguous": 1
+        },
+        "Implicit": {
+          "gold": 587,
+          "detected": 504,
+          "unknown": 70,
+          "correct": 112,
+          "wrong": 322
+        }
+      },
+      "chapters_detected": 20,
+      "seconds": 11.6
+    },
+    "TheSignOfTheFour": {
+      "counts": {
+        "gold": 891,
+        "detected": 711,
+        "wrong": 358,
+        "auto_accepted": 401,
+        "correct": 259,
+        "auto_accepted_correct": 183,
+        "unknown": 94,
+        "flagged_for_review": 310
+      },
+      "by_tier": {
+        "pronoun -> last mention (0.55)": {
+          "n": 271,
+          "wrong": 178,
+          "correct": 93
+        },
+        "unknown (0.0)": {
+          "n": 94,
+          "unknown": 94
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 130,
+          "wrong": 40,
+          "correct": 90
+        },
+        "turn alternation (0.35)": {
+          "n": 216,
+          "wrong": 140,
+          "correct": 76
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 416,
+          "detected": 360,
+          "wrong": 226,
+          "correct": 102,
+          "unknown": 32
+        },
+        "Implicit": {
+          "gold": 327,
+          "detected": 217,
+          "unknown": 52,
+          "correct": 54,
+          "wrong": 111
+        },
+        "Explicit": {
+          "gold": 148,
+          "detected": 134,
+          "unknown": 10,
+          "wrong": 21,
+          "correct": 103
+        }
+      },
+      "chapters_detected": 12,
+      "seconds": 6.6
+    },
+    "TheSportOfTheGods": {
+      "counts": {
+        "gold": 810,
+        "detected": 694,
+        "correct": 209,
+        "auto_accepted": 272,
+        "auto_accepted_correct": 125,
+        "wrong": 483,
+        "flagged_for_review": 422,
+        "ambiguous": 2
+      },
+      "by_tier": {
+        "pronoun -> last mention (0.55)": {
+          "n": 201,
+          "correct": 71,
+          "wrong": 128,
+          "ambiguous": 2
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 71,
+          "correct": 54,
+          "wrong": 17
+        },
+        "turn alternation (0.35)": {
+          "n": 422,
+          "wrong": 338,
+          "correct": 84
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 304,
+          "detected": 243,
+          "correct": 80,
+          "wrong": 161,
+          "ambiguous": 2
+        },
+        "Explicit": {
+          "gold": 156,
+          "detected": 125,
+          "correct": 60,
+          "wrong": 65
+        },
+        "Implicit": {
+          "gold": 350,
+          "detected": 326,
+          "wrong": 257,
+          "correct": 69
+        }
+      },
+      "chapters_detected": 1,
+      "seconds": 7.4
+    },
+    "TheSunAlsoRises": {
+      "counts": {
+        "gold": 3242,
+        "detected": 2625,
+        "wrong": 1247,
+        "auto_accepted": 1326,
+        "unknown": 267,
+        "flagged_for_review": 1299,
+        "correct": 1085,
+        "auto_accepted_correct": 782,
+        "ambiguous": 26
+      },
+      "by_tier": {
+        "pronoun -> last mention (0.55)": {
+          "n": 528,
+          "wrong": 390,
+          "correct": 135,
+          "ambiguous": 3
+        },
+        "unknown (0.0)": {
+          "n": 267,
+          "unknown": 267
+        },
+        "turn alternation (0.35)": {
+          "n": 1032,
+          "wrong": 713,
+          "correct": 303,
+          "ambiguous": 16
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 798,
+          "correct": 647,
+          "wrong": 144,
+          "ambiguous": 7
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 731,
+          "detected": 529,
+          "wrong": 381,
+          "unknown": 43,
+          "correct": 103,
+          "ambiguous": 2
+        },
+        "Implicit": {
+          "gold": 1556,
+          "detected": 1313,
+          "wrong": 765,
+          "correct": 319,
+          "ambiguous": 17,
+          "unknown": 212
+        },
+        "Explicit": {
+          "gold": 954,
+          "detected": 783,
+          "correct": 663,
+          "wrong": 101,
+          "unknown": 12,
+          "ambiguous": 7
+        },
+        "nan": {
+          "gold": 1
+        }
+      },
+      "chapters_detected": 19,
+      "seconds": 16.7
+    },
+    "WhereAngelsFearToTread": {
+      "counts": {
+        "gold": 1236,
+        "detected": 1007,
+        "wrong": 550,
+        "auto_accepted": 445,
+        "flagged_for_review": 562,
+        "correct": 430,
+        "auto_accepted_correct": 240,
+        "unknown": 27
+      },
+      "by_tier": {
+        "pronoun -> last mention (0.55)": {
+          "n": 263,
+          "wrong": 176,
+          "correct": 87
+        },
+        "turn alternation (0.35)": {
+          "n": 535,
+          "wrong": 345,
+          "correct": 190
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 182,
+          "correct": 153,
+          "wrong": 29
+        },
+        "unknown (0.0)": {
+          "n": 27,
+          "unknown": 27
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 398,
+          "detected": 312,
+          "wrong": 203,
+          "correct": 104,
+          "unknown": 5
+        },
+        "Implicit": {
+          "gold": 530,
+          "detected": 447,
+          "wrong": 264,
+          "correct": 165,
+          "unknown": 18
+        },
+        "Explicit": {
+          "gold": 308,
+          "detected": 248,
+          "wrong": 83,
+          "correct": 161,
+          "unknown": 4
+        }
+      },
+      "chapters_detected": 10,
+      "seconds": 9.8
+    },
+    "WinnieThePooh": {
+      "counts": {
+        "gold": 1178,
+        "detected": 859,
+        "wrong": 335,
+        "auto_accepted": 550,
+        "ambiguous": 76,
+        "correct": 425,
+        "flagged_for_review": 309,
+        "auto_accepted_correct": 335,
+        "unknown": 23
+      },
+      "by_tier": {
+        "pronoun -> last mention (0.55)": {
+          "n": 127,
+          "wrong": 63,
+          "ambiguous": 14,
+          "correct": 50
+        },
+        "named speech-verb subject (0.9)": {
+          "n": 423,
+          "ambiguous": 48,
+          "wrong": 90,
+          "correct": 285
+        },
+        "turn alternation (0.35)": {
+          "n": 286,
+          "correct": 90,
+          "ambiguous": 14,
+          "wrong": 182
+        },
+        "unknown (0.0)": {
+          "n": 23,
+          "unknown": 23
+        }
+      },
+      "by_quote_type": {
+        "Anaphoric": {
+          "gold": 247,
+          "detected": 182,
+          "wrong": 86,
+          "correct": 73,
+          "ambiguous": 12,
+          "unknown": 11
+        },
+        "Explicit": {
+          "gold": 653,
+          "detected": 451,
+          "ambiguous": 51,
+          "correct": 288,
+          "wrong": 109,
+          "unknown": 3
+        },
+        "Implicit": {
+          "gold": 264,
+          "detected": 216,
+          "wrong": 133,
+          "correct": 61,
+          "ambiguous": 13,
+          "unknown": 9
+        },
+        "": {
+          "gold": 14,
+          "detected": 10,
+          "correct": 3,
+          "wrong": 7
+        }
+      },
+      "chapters_detected": 14,
+      "seconds": 7.2
+    }
+  }
+}
