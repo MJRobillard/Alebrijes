@@ -32,3 +32,10 @@ voice_prompts_cache/
 # Local env
 .env
 .DS_Store
+
+# Editor/AI tooling state -- local only
+.cursorindexingignore
+.specstory/
+
+# Copyrighted book excerpts used for local testing -- never committed
+tests/fixtures/RedRising*.txt

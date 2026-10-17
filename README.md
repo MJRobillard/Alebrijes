@@ -4,7 +4,7 @@ Local, multi-voice book-to-audiobook engine. Cloned voices are cast to character
 by a rule-based speaker-attribution pass, then rendered with a local TTS model —
 no cloud dependency, no per-character cost.
 
-Successor to `pocket-tts-agent` (`~/projects/audio`), which proved the core
+Successor to [`pocket-tts-agent`](https://github.com/MJRobillard/HuggingFaceKyutai-pocket-TTS), which proved the core
 idea (local voice cloning, cached voice states, parallel synthesis, chaptered
 `.m4b` output) but grew as a pile of scripts. This repo is a clean rebuild
 around a six-stage pipeline: **ingest → segment → attribute → cast → synth →
