@@ -18,6 +18,14 @@ The full pipeline (ingest/segment/attribute/cast/synth/assemble) works for
 verified end to end on Windows. See `PHASES.md` for the rollout plan, what's
 done, and what's next.
 
+- **Evaluated:** speaker attribution is scored against 48,803 hand-annotated
+  quotes from 28 novels (the Project Dialogism Novel Corpus). See
+  [`evals/attribution/`](evals/attribution/README.md) for the numbers, what
+  the eval found, and what it fixed.
+- **Distributed:** a book can be rendered across a Kubernetes cluster with
+  one pod per chapter, per-chapter retries, and resumable parts. See
+  [`deploy/k8s/`](deploy/k8s/README.md).
+
 ## Project layout
 
 - `src/alebrijes/` — the pipeline, one module per stage, plus `server.py` /

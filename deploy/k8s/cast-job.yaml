@@ -1,0 +1,22 @@
+# Step 1: speaker attribution -> /data/${STEM}.cast.yaml (one pod, CPU-light).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: alebrijes-cast
+  namespace: alebrijes
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext: {runAsUser: ${HOST_UID}, runAsGroup: ${HOST_GID}}
+      containers:
+        - name: cast
+          image: alebrijes:dev
+          imagePullPolicy: Never
+          args: [cast, /data/${BOOK}, --out, /data/${STEM}.cast.yaml]
+          env: [{name: HOME, value: /tmp}]
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: alebrijes-data}

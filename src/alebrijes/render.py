@@ -20,6 +20,7 @@ built against, in particular:
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ from alebrijes.segment import Span, SpanKind, segment_paragraph
 from alebrijes.synth.agent import TTSAgent, write_wav_array
 from alebrijes.synth.parallel import build_m4b
 from alebrijes.transcript import ChapterMark, SpanTiming, Transcript
+from alebrijes.transcript import load as load_transcript
 from alebrijes.transcript import save as save_transcript
 
 NARRATOR = "Narrator"
@@ -238,47 +240,120 @@ def render_book(
 
     staging_dir = Path(tempfile.mkdtemp(prefix="alebrijes_render_"))
     try:
-        part_paths: list[Path] = []
-        chapter_titles: list[str] = []
-        chapter_marks: list[ChapterMark] = []
-        all_timings: list[SpanTiming] = []
         total_chapters = len(book.chapters)
-        book_cursor_ms = 0
-        for chapter in book.chapters:
-            voiced_spans = resolve_chapter_spans(chapter, cast_file, script_format=book.source_format == "script")
-            audio, chapter_timings = synthesize_chapter(voiced_spans, voice_states, agent, pause_ms=pause_ms)
-
-            part_path = staging_dir / f"chapter_{chapter.index:04d}.wav"
-            write_wav_array(part_path, agent.sample_rate, audio)
-            part_paths.append(part_path)
-            title = chapter.title or f"Chapter {chapter.index + 1}"
-            chapter_titles.append(title)
-
-            chapter_start_ms = book_cursor_ms
-            chapter_duration_ms = round(audio.size / agent.sample_rate * 1000)
-            book_cursor_ms += chapter_duration_ms
-            chapter_marks.append(ChapterMark(chapter.index, title, chapter_start_ms, book_cursor_ms))
-            for timing in chapter_timings:
-                timing.start_ms += chapter_start_ms
-                timing.end_ms += chapter_start_ms
-            all_timings.extend(chapter_timings)
-
-            if on_chapter_done is not None:
-                on_chapter_done(len(part_paths), total_chapters)
-
-        m4b_path = build_m4b(part_paths, chapter_titles, output_path, book_title=book.title)
-
-        resolved_transcript_path = transcript_path or output_path.with_suffix(".transcript.json")
-        save_transcript(
-            Transcript(
+        for completed, chapter in enumerate(book.chapters, start=1):
+            render_chapter_part(
+                chapter,
+                cast_file,
+                agent,
+                voice_states,
+                staging_dir,
+                pause_ms=pause_ms,
+                script_format=book.source_format == "script",
                 book_title=book.title,
-                chapters=chapter_marks,
-                spans=all_timings,
-                quiz_checkpoints=book.quiz_checkpoints,
-            ),
-            resolved_transcript_path,
-        )
+            )
+            if on_chapter_done is not None:
+                on_chapter_done(completed, total_chapters)
 
-        return m4b_path
+        return assemble_parts(book, staging_dir, output_path, transcript_path=transcript_path)
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
+
+
+def part_paths_for(parts_dir: Path, chapter_index: int) -> tuple[Path, Path]:
+    """(audio, metadata) paths for one rendered chapter part."""
+    stem = parts_dir / f"chapter_{chapter_index:04d}"
+    return stem.with_suffix(".wav"), stem.with_suffix(".json")
+
+
+def render_chapter_part(
+    chapter: Chapter,
+    cast_file: CastFile,
+    agent: TTSAgent,
+    voice_states: dict[str, tuple[str, object]],
+    parts_dir: Path,
+    *,
+    pause_ms: int = DEFAULT_PAUSE_MS,
+    script_format: bool = False,
+    book_title: str = "",
+) -> Path:
+    """Renders one chapter to `parts_dir` as a WAV plus a one-chapter
+    `Transcript` sidecar (chapter-relative timings), and returns the
+    sidecar's path.
+
+    The unit of work for a distributed render (one Kubernetes Indexed Job
+    pod per chapter, see deploy/k8s/) as well as `render_book`'s own loop.
+    Idempotent: a part whose sidecar already exists is skipped, and both
+    files are written under temporary names then renamed (the sidecar last),
+    so a pod killed mid-write never leaves a part that looks finished --
+    a retried chapter just renders again.
+    """
+    wav_path, meta_path = part_paths_for(parts_dir, chapter.index)
+    if meta_path.exists() and wav_path.exists():
+        return meta_path
+
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    voiced_spans = resolve_chapter_spans(chapter, cast_file, script_format=script_format)
+    audio, timings = synthesize_chapter(voiced_spans, voice_states, agent, pause_ms=pause_ms)
+
+    title = chapter.title or f"Chapter {chapter.index + 1}"
+    duration_ms = round(audio.size / agent.sample_rate * 1000)
+    tmp_wav = wav_path.with_name(wav_path.name + ".tmp")
+    tmp_meta = meta_path.with_name(meta_path.name + ".tmp")
+    write_wav_array(tmp_wav, agent.sample_rate, audio)
+    save_transcript(
+        Transcript(book_title=book_title, chapters=[ChapterMark(chapter.index, title, 0, duration_ms)], spans=timings),
+        tmp_meta,
+    )
+    os.replace(tmp_wav, wav_path)
+    os.replace(tmp_meta, meta_path)
+    return meta_path
+
+
+def assemble_parts(
+    book: Book,
+    parts_dir: Path,
+    output_path: Path,
+    *,
+    transcript_path: Path | None = None,
+) -> Path:
+    """Stitches every chapter part `render_chapter_part` wrote into one
+    chaptered .m4b, plus a whole-book `Transcript` sidecar (`transcript_path`,
+    defaulting to `output_path.with_suffix(".transcript.json")`) with each
+    span shifted from chapter-relative to whole-book time."""
+    missing = [c.index for c in book.chapters if not part_paths_for(parts_dir, c.index)[1].exists()]
+    if missing:
+        raise RuntimeError(f"Missing rendered parts for chapter indexes {missing} in {parts_dir}")
+
+    part_paths: list[Path] = []
+    chapter_titles: list[str] = []
+    chapter_marks: list[ChapterMark] = []
+    all_timings: list[SpanTiming] = []
+    book_cursor_ms = 0
+    for chapter in book.chapters:
+        wav_path, meta_path = part_paths_for(parts_dir, chapter.index)
+        part = load_transcript(meta_path)
+        [mark] = part.chapters
+
+        chapter_start_ms = book_cursor_ms
+        book_cursor_ms += mark.end_ms
+        chapter_marks.append(ChapterMark(chapter.index, mark.title, chapter_start_ms, book_cursor_ms))
+        for timing in part.spans:
+            timing.start_ms += chapter_start_ms
+            timing.end_ms += chapter_start_ms
+        all_timings.extend(part.spans)
+        part_paths.append(wav_path)
+        chapter_titles.append(mark.title)
+
+    m4b_path = build_m4b(part_paths, chapter_titles, output_path, book_title=book.title)
+
+    save_transcript(
+        Transcript(
+            book_title=book.title,
+            chapters=chapter_marks,
+            spans=all_timings,
+            quiz_checkpoints=book.quiz_checkpoints,
+        ),
+        transcript_path or output_path.with_suffix(".transcript.json"),
+    )
+    return m4b_path

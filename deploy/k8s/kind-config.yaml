@@ -1,0 +1,15 @@
+# Local multi-node cluster: 1 control plane + 3 workers, so render pods
+# visibly spread across nodes. Every node mounts the same host directory
+# at /data -- the shared volume chapter pods write parts into and the
+# assemble Job reads back (pv.yaml). ${DATA_DIR} is filled in by run.sh.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: alebrijes
+nodes:
+  - role: control-plane
+  - role: worker
+    extraMounts: [{hostPath: "${DATA_DIR}", containerPath: /data}]
+  - role: worker
+    extraMounts: [{hostPath: "${DATA_DIR}", containerPath: /data}]
+  - role: worker
+    extraMounts: [{hostPath: "${DATA_DIR}", containerPath: /data}]

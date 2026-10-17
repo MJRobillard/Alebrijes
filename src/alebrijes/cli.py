@@ -116,6 +116,58 @@ def _cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_chapters(args: argparse.Namespace) -> int:
+    print(len(_ingest_book(Path(args.book)).chapters))
+    return 0
+
+
+def _cmd_render_chapter(args: argparse.Namespace) -> int:
+    import os
+
+    from alebrijes.cast import load
+    from alebrijes.render import build_render_agent, part_paths_for, render_chapter_part
+
+    book = _ingest_book(Path(args.book))
+    index = args.chapter if args.chapter is not None else int(os.environ.get("JOB_COMPLETION_INDEX", "-1"))
+    if not 0 <= index < len(book.chapters):
+        raise SystemExit(
+            f"Chapter index {index} out of range: '{book.title}' has {len(book.chapters)} chapters "
+            "(pass --chapter, or run as a Kubernetes Indexed Job pod, which sets JOB_COMPLETION_INDEX)."
+        )
+
+    # Checked here as well as in render_chapter_part so a re-run pod skips
+    # loading the TTS model too, not just the synthesis.
+    if all(path.exists() for path in part_paths_for(Path(args.parts_dir), book.chapters[index].index)):
+        print(f"Chapter {index + 1}/{len(book.chapters)} already rendered, skipping")
+        return 0
+
+    cast_file = load(Path(args.cast))
+    agent, voice_states = build_render_agent(cast_file)
+    meta_path = render_chapter_part(
+        book.chapters[index],
+        cast_file,
+        agent,
+        voice_states,
+        Path(args.parts_dir),
+        pause_ms=args.pause_ms,
+        script_format=book.source_format == "script",
+        book_title=book.title,
+    )
+    print(f"Chapter {index + 1}/{len(book.chapters)} done: {meta_path}")
+    return 0
+
+
+def _cmd_assemble(args: argparse.Namespace) -> int:
+    from alebrijes.render import assemble_parts
+
+    book_path = Path(args.book)
+    book = _ingest_book(book_path)
+    out_path = Path(args.out) if args.out else book_path.with_suffix(".m4b")
+    result_path = assemble_parts(book, Path(args.parts_dir), out_path)
+    print(f"Wrote audiobook: {result_path}")
+    return 0
+
+
 def _cmd_rag(args: argparse.Namespace) -> int:
     if args.rag_command == "build":
         return _cmd_rag_build(args)
@@ -190,6 +242,29 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("--out", help="Where to write the audiobook (default: <book>.m4b).")
     render.add_argument("--pause-ms", type=int, default=250, help="Silence between lines, in milliseconds.")
     render.set_defaults(func=_cmd_render)
+
+    # Distributed render: `render` split into its parallel per-chapter step
+    # and its final stitch step, e.g. one Kubernetes Indexed Job pod per
+    # chapter followed by one assemble Job (see deploy/k8s/).
+    chapters = subparsers.add_parser("chapters", help="Print how many chapters a book parses into.")
+    chapters.add_argument("book", help="Path to an epub/pdf/txt source file.")
+    chapters.set_defaults(func=_cmd_chapters)
+
+    render_chapter = subparsers.add_parser("render-chapter", help="Render one chapter to a parts directory.")
+    render_chapter.add_argument("book", help="Path to an epub/pdf/txt source file.")
+    render_chapter.add_argument("--cast", required=True, help="Path to the cast.yaml produced by `alebrijes cast`.")
+    render_chapter.add_argument("--parts-dir", required=True, help="Directory shared by every chapter's part.")
+    render_chapter.add_argument(
+        "--chapter", type=int, help="0-based chapter index (default: $JOB_COMPLETION_INDEX, set by Kubernetes)."
+    )
+    render_chapter.add_argument("--pause-ms", type=int, default=250, help="Silence between lines, in milliseconds.")
+    render_chapter.set_defaults(func=_cmd_render_chapter)
+
+    assemble = subparsers.add_parser("assemble", help="Stitch rendered chapter parts into one .m4b.")
+    assemble.add_argument("book", help="Path to the same source file the parts were rendered from.")
+    assemble.add_argument("--parts-dir", required=True, help="Directory `render-chapter` wrote parts to.")
+    assemble.add_argument("--out", help="Where to write the audiobook (default: <book>.m4b).")
+    assemble.set_defaults(func=_cmd_assemble)
 
     rag = subparsers.add_parser("rag", help="Build a RAG index for interactive narration.")
     rag.set_defaults(func=_cmd_rag)

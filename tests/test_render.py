@@ -262,3 +262,95 @@ def test_render_book_fails_fast_when_ffmpeg_missing_before_any_synthesis(
 
     with pytest.raises(RuntimeError, match="could not be located"):
         render_book(book, cast_file, tmp_path / "out.m4b")
+
+
+def _two_chapter_book():
+    from alebrijes.ingest import Book
+
+    return Book(
+        title="Fixture",
+        chapters=[
+            Chapter(title="One", index=0, paragraphs=[Paragraph(text="The room was quiet.", index=0)]),
+            Chapter(
+                title="Two",
+                index=1,
+                paragraphs=[
+                    Paragraph(text="It rained.", index=0),
+                    Paragraph(text='Colin said, "Let\'s take another path."', index=1),
+                ],
+            ),
+        ],
+    )
+
+
+def _voice_states() -> dict:
+    return {NARRATOR: ("alba", object()), "Colin": ("javert", object())}
+
+
+def test_render_chapter_part_writes_part_and_skips_it_when_rerun(tmp_path: Path) -> None:
+    from alebrijes.render import part_paths_for, render_chapter_part
+
+    chapter = _two_chapter_book().chapters[1]
+    agent = _RecordingAgent()
+
+    meta_path = render_chapter_part(chapter, _cast_file(), agent, _voice_states(), tmp_path, pause_ms=0)
+    calls_after_first = len(agent.calls)
+    render_chapter_part(chapter, _cast_file(), agent, _voice_states(), tmp_path, pause_ms=0)
+
+    wav_path, expected_meta = part_paths_for(tmp_path, 1)
+    assert meta_path == expected_meta and wav_path.exists()
+    assert not list(tmp_path.glob("*.tmp"))
+    assert calls_after_first == 3
+    assert len(agent.calls) == calls_after_first  # retried pod: nothing re-synthesized
+
+
+def test_assemble_parts_shifts_spans_to_whole_book_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from alebrijes.render import assemble_parts, render_chapter_part
+    from alebrijes.transcript import load
+
+    built: dict = {}
+    monkeypatch.setattr(
+        "alebrijes.render.build_m4b",
+        lambda parts, titles, out, book_title=None: built.update(parts=parts, titles=titles) or out,
+    )
+    book = _two_chapter_book()
+    agent = _RecordingAgent()  # 4 samples per line at 1000 Hz = 4 ms
+    for chapter in book.chapters:
+        render_chapter_part(chapter, _cast_file(), agent, _voice_states(), tmp_path / "parts", pause_ms=0)
+
+    assemble_parts(book, tmp_path / "parts", tmp_path / "book.m4b")
+
+    transcript = load(tmp_path / "book.transcript.json")
+    assert built["titles"] == ["One", "Two"]
+    assert [(c.start_ms, c.end_ms) for c in transcript.chapters] == [(0, 4), (4, 16)]
+    assert [s.start_ms for s in transcript.spans] == [0, 4, 8, 12]
+
+
+def test_assemble_parts_names_missing_chapters(tmp_path: Path) -> None:
+    from alebrijes.render import assemble_parts, render_chapter_part
+
+    book = _two_chapter_book()
+    render_chapter_part(book.chapters[0], _cast_file(), _RecordingAgent(), _voice_states(), tmp_path, pause_ms=0)
+
+    with pytest.raises(RuntimeError, match=r"chapter indexes \[1\]"):
+        assemble_parts(book, tmp_path, tmp_path / "book.m4b")
+
+
+def test_render_book_matches_distributed_render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from alebrijes.render import assemble_parts, render_book, render_chapter_part
+
+    monkeypatch.setattr("alebrijes.render.find_ffmpeg", lambda: None)
+    monkeypatch.setattr("alebrijes.render.build_m4b", lambda parts, titles, out, book_title=None: out)
+    monkeypatch.setattr(
+        "alebrijes.render.build_render_agent", lambda cast_file, model=None: (_RecordingAgent(), _voice_states())
+    )
+    book = _two_chapter_book()
+
+    render_book(book, _cast_file(), tmp_path / "local.m4b", pause_ms=0)
+    for chapter in book.chapters:
+        render_chapter_part(chapter, _cast_file(), _RecordingAgent(), _voice_states(), tmp_path / "parts", pause_ms=0)
+    assemble_parts(book, tmp_path / "parts", tmp_path / "distributed.m4b")
+
+    local = (tmp_path / "local.transcript.json").read_text()
+    distributed = (tmp_path / "distributed.transcript.json").read_text()
+    assert local == distributed

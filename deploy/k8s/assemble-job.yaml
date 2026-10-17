@@ -1,0 +1,22 @@
+# Step 3: stitch every chapter part into one chaptered .m4b + transcript.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: alebrijes-assemble
+  namespace: alebrijes
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext: {runAsUser: ${HOST_UID}, runAsGroup: ${HOST_GID}}
+      containers:
+        - name: assemble
+          image: alebrijes:dev
+          imagePullPolicy: Never
+          args: [assemble, /data/${BOOK}, --parts-dir, /data/parts/${STEM}, --out, /data/out/${STEM}.m4b]
+          env: [{name: HOME, value: /tmp}]
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: alebrijes-data}

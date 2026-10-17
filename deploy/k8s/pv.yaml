@@ -1,0 +1,32 @@
+# Shared /data volume. kind's default storage class is node-local
+# (ReadWriteOnce), which can't back pods on different nodes writing to one
+# directory; a hostPath PV over the directory every node mounts from the
+# host (kind-config.yaml extraMounts) can. Local-cluster only -- a real
+# cluster would use an RWX class (NFS/EFS/Filestore) or object storage.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: alebrijes
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: alebrijes-data
+spec:
+  capacity: {storage: 20Gi}
+  accessModes: [ReadWriteMany]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath: {path: /data, type: Directory}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: alebrijes-data
+  namespace: alebrijes
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: ""
+  volumeName: alebrijes-data
+  resources:
+    requests: {storage: 20Gi}

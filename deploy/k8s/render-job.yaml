@@ -1,0 +1,46 @@
+# Step 2: the fan-out. One pod per chapter (Indexed Job: Kubernetes sets
+# JOB_COMPLETION_INDEX, which `alebrijes render-chapter` reads as the
+# chapter index), at most ${PARALLELISM} at a time.
+#
+# Failure handling is per chapter, not per book: backoffLimitPerIndex
+# retries a failed chapter up to 2 more times on its own, and
+# render_chapter_part's atomic write + skip-if-done means a retried or
+# re-run pod never redoes or corrupts a finished chapter.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: alebrijes-render
+  namespace: alebrijes
+spec:
+  completionMode: Indexed
+  completions: ${CHAPTERS}
+  parallelism: ${PARALLELISM}
+  backoffLimitPerIndex: 2
+  maxFailedIndexes: 0
+  template:
+    metadata:
+      labels: {app: alebrijes-render}
+    spec:
+      restartPolicy: Never  # required by backoffLimitPerIndex
+      securityContext: {runAsUser: ${HOST_UID}, runAsGroup: ${HOST_GID}}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: {matchLabels: {app: alebrijes-render}}
+      containers:
+        - name: render
+          image: alebrijes:dev
+          imagePullPolicy: Never
+          args: [render-chapter, /data/${BOOK}, --cast, /data/${STEM}.cast.yaml, --parts-dir, /data/parts/${STEM}]
+          env: [{name: HOME, value: /tmp}]
+          # pocket-tts synthesis is single-threaded: one core per pod, and
+          # scale by adding pods (synth/parallel.py's benchmark showed
+          # oversubscribing cores makes everything slower, not faster).
+          resources:
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {cpu: "1", memory: 3Gi}
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: alebrijes-data}

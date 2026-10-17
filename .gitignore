@@ -39,3 +39,6 @@ voice_prompts_cache/
 
 # Copyrighted book excerpts used for local testing -- never committed
 tests/fixtures/RedRising*.txt
+
+# Kubernetes demo: generated books, rendered parts, and output audio
+deploy/k8s/data/
